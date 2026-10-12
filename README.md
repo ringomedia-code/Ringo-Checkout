@@ -1,2 +1,234 @@
-# Ringo-Checkout
-Native boat listing forms with Stripe and PayPal checkout, smart form add-ons, add-on-only orders for published boats, payment emails, follow-ups, and failure tracking.
+# Ringo Stripe + PayPal Checkout
+
+A WordPress plugin for [BassBoat4Sale.com](https://bassboat4sale.com) that handles the whole boat listing and payment flow: native listing forms, Stripe and PayPal checkout, package and add-on pricing, coupons, payment emails, abandoned and unpaid follow-ups, and payment failure tracking.
+
+| | |
+|---|---|
+| **Version** | 9.4.7 |
+| **Requires PHP** | 7.4 or newer |
+| **Text domain** | `ringo-checkout` |
+| **Author** | [Ringo Media](https://ringomedia.com/) |
+| **License** | GPL-2.0-or-later |
+
+## Contents
+
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Pages and shortcodes](#pages-and-shortcodes)
+- [How a listing is paid for](#how-a-listing-is-paid-for)
+- [Add-ons](#add-ons)
+- [Coupons](#coupons)
+- [Emails and background jobs](#emails-and-background-jobs)
+- [Payment failure monitoring](#payment-failure-monitoring)
+- [Admin screens](#admin-screens)
+- [Developer reference](#developer-reference)
+- [Updates](#updates)
+- [Project layout](#project-layout)
+- [More documentation](#more-documentation)
+
+## What it does
+
+- **Native boat forms.** Sellers submit and edit listings with forms built into this plugin (no JetFormBuilder needed).
+- **Stripe and PayPal checkout.** One checkout for the listing package plus any selected add-ons, with a test/sandbox mode and a live mode.
+- **Listing packages.** Standard, Featured, VIP and Pro, each with its own price, description, photo limit and video limit.
+- **Smart add-ons.** Extra photos, extra video fields and service add-ons, purchasable with a new listing or for an existing published boat.
+- **Coupons.** Coupon codes validated at checkout, with a tool for emailing coupons.
+- **Draft until paid.** A new listing is saved as a Draft and publishes when payment succeeds.
+- **Emails.** Customer and admin payment emails, abandoned-checkout and unpaid-boat follow-ups, and plain-language payment failure alerts.
+- **Dealer accounts.** Dealers pay for their plan outside the site, so the base package price is waived and only paid add-ons are charged. A dealer with nothing to pay is published directly.
+- **Payment safety nets.** A thank-you page check and a 10-minute background job both verify payment status with Stripe or PayPal, so a closed browser does not leave a paid boat unpublished.
+
+## Requirements
+
+- WordPress with PHP 7.4+
+- **JetEngine** is required. The `boats` post type, the Boat Detail meta box and the boat taxonomies are registered by JetEngine.
+- A Stripe account, a PayPal REST app, or both.
+- An HTTPS site (needed by Stripe and PayPal).
+- A working outgoing email setup (the site uses an SMTP plugin).
+
+Bundled in `vendor/`, nothing to install: the Stripe PHP SDK and the Plugin Update Checker library.
+
+The plugin works with the `boats` and `dlr_boats` post types. Change that list with the `ringo_boat_post_types` filter.
+
+## Installation
+
+1. Upload the plugin folder to `wp-content/plugins/` (for example `Ringo-Checkout-main`) and activate it.
+2. On activation the plugin seeds the default add-ons and schedules its background jobs.
+3. Go to **Ringo Custom Checkout > Settings** and enter your keys (see below).
+4. Make sure the pages in [Pages and shortcodes](#pages-and-shortcodes) exist.
+
+If you are replacing an older copy of this plugin that lives in a different folder, **deactivate the old one first, then activate the new one.** Both versions schedule the same cron jobs and use the same settings, so running both at once is not supported. Settings are stored in the database and carry over.
+
+## Configuration
+
+Open **Ringo Custom Checkout > Settings**. Settings are saved in the `ringo_stripe_settings` option.
+
+| Setting | Notes |
+|---|---|
+| Mode | `test` or `live`. New installs start in **test**. |
+| Stripe keys | Test and live secret and publishable keys. |
+| PayPal | `sandbox` or `live` mode, with a client ID and secret for each. |
+| Package prices | Defaults: Standard 59.99, Featured 79.99, VIP 225.99, Pro 225.99. |
+| Package descriptions | Shown on the checkout. |
+| Abandoned after | Seconds before an unpaid checkout counts as abandoned. Default 360 (6 minutes). |
+
+**Keep live mode on live and test mode everywhere else.** Settings are stored in each site's database, so a staging site does not inherit the live site's mode or keys.
+
+### Keys in `wp-config.php` (optional)
+
+Stripe keys may be supplied as constants. They are used when keys are not saved in settings:
+
+```php
+define( 'RINGO_STRIPE_SECRET_KEY',      'sk_...' );
+define( 'RINGO_STRIPE_PUBLISHABLE_KEY', 'pk_...' );
+```
+
+Other optional constants:
+
+```php
+define( 'RINGO_DEBUG', true );                              // mirror the plugin log to PHP error_log
+define( 'RINGO_DRAFT_FAILURE_JOSH_EMAIL', 'name@example.com' ); // extra recipient for payment failure alerts
+```
+
+**Never commit API keys, webhook secrets or tokens to this repository.**
+
+## Pages and shortcodes
+
+The native forms are placed automatically on:
+
+- `/add-boat/` for a new listing
+- `/account/edit-post/?_post_id=BOAT_ID` for editing a boat, or paying for an unpaid Draft
+
+Logged-out visitors are sent to `/register-login/`, with the form URL passed along as `redirect_to` so they return after logging in.
+
+Manual shortcodes:
+
+| Shortcode | Purpose |
+|---|---|
+| `[ringo_boat_submission_form]` | New boat listing form with checkout |
+| `[ringo_boat_edit_form]` | Edit form for an existing boat |
+| `[ringo_boat_pay_now]` | Pay for an existing Draft boat |
+| `[ringo_addon_services]` | Add-on services page: choose **New listing** or **Existing published boat** |
+
+Turn off automatic placement with the `ringo_native_auto_inject_forms` filter, and change the login URL with `ringo_native_login_url`.
+
+## How a listing is paid for
+
+1. The seller chooses a package and optional add-ons. The form's photo and video limits update to match.
+2. The seller submits the form. The boat is saved as a **Draft** with its meta, taxonomies, featured image and gallery.
+3. The seller pays through Stripe or PayPal. A coupon, if used, is applied.
+4. On success the Draft is published and the seller and admin are emailed.
+5. If the buyer closes the page early, the thank-you page and the background checker confirm the payment status with Stripe or PayPal and publish the boat if it was paid.
+
+Package base limits:
+
+| Package | Gallery photos | Video URL fields |
+|---|---|---|
+| Standard | 4 | 0 |
+| Featured | 10 | 1 |
+| VIP | 25 | 2 |
+| Pro | 25 | 2 |
+
+## Add-ons
+
+- **Form add-ons** change the form's limits (extra gallery photos or extra video fields).
+- **System add-ons** change the price and record the service without changing the form.
+
+Manage them under **Ringo Custom Checkout > Add-ons**. Customers can also buy add-ons for a boat that is already published through the `[ringo_addon_services]` page. The listing package is not charged again, and completed purchases appear under the payments screen as add-on orders. After an add-on-only payment the customer lands on the boat's edit page, where the new limits apply immediately.
+
+Details are in [`ADDON-MODULE.md`](ADDON-MODULE.md).
+
+## Coupons
+
+Manage codes under **Ringo Custom Checkout > Coupon Codes**. Codes are validated at checkout, and a tool on that screen emails coupons using an editable email template.
+
+## Emails and background jobs
+
+Two WP-Cron jobs run every 10 minutes (a custom `ringo_10min` schedule):
+
+| Hook | What it does |
+|---|---|
+| `ringo_check_abandoned_checkouts` | Finds unpaid boats older than the abandoned window. If Stripe or PayPal says the payment completed, it publishes the boat. Otherwise it sends the abandoned-checkout follow-up to the customer and admin and marks the boat followed up. |
+| `ringo_check_unpaid_boats` | Finds Draft boats still marked unpaid after the unpaid timeout (default 180 seconds) and sends a reminder to the customer and the admin, once per boat. It waits while a payment is still in progress. |
+
+A third job, `puc_cron_check_updates-ringo-checkout`, runs every 12 hours and looks for plugin updates. That one is expected.
+
+After install or an upgrade, run `wp cron event list` and confirm each job appears **once**.
+
+Email types: customer payment confirmation, admin payment notification, abandoned-checkout, unpaid-boat reminder, payment failure alert and coupon emails. Sent emails are recorded under **Email Logs**.
+
+## Payment failure monitoring
+
+When a listing payment fails or stalls, a dedicated plain-language email goes to the seller and the site admin. It covers card rejections, gateway errors and timeouts, a stuck payment screen, delayed or pending status, and a checkout that was closed or abandoned. Each event is kept on the boat in `_ringo_draft_failure_history` and in the plugin log.
+
+This channel has its own sent flags and does not mark a boat as followed up. Add recipients with the `RINGO_DRAFT_FAILURE_JOSH_EMAIL` constant or the `ringo_draft_failure_recipients` filter.
+
+Details are in [`DRAFT-FAILURE-MONITORING.md`](DRAFT-FAILURE-MONITORING.md).
+
+## Admin screens
+
+All under the **Ringo Custom Checkout** menu (administrators only):
+
+| Screen | Purpose |
+|---|---|
+| Payments | Payment records and add-on orders, with delete and mark-as-paid actions |
+| Settings | Mode, keys, prices, descriptions, timings |
+| Add-ons | Create and edit add-ons |
+| Email Logs | Record of emails sent by the plugin |
+| Coupon Codes | Create coupons and email them |
+
+Two dashboard widgets are added: **Paid Boats**, and **Action Required** (unpaid and payment-failed boats).
+
+## Developer reference
+
+**Filters**
+
+| Filter | Use |
+|---|---|
+| `ringo_boat_post_types` | Post types treated as boats (default `boats`, `dlr_boats`) |
+| `ringo_native_auto_inject_forms` | Turn automatic form placement on or off |
+| `ringo_native_login_url` | Login page URL for logged-out visitors |
+| `ringo_draft_failure_recipients` | Recipients of payment failure alerts |
+| `ringo_log_to_error_log` | Mirror a log message to PHP `error_log` |
+| `ringo_allow_client_price_fallback` | Off by default for security: prices come only from the plugin settings. Return true to accept a browser-supplied price for an unknown package (legacy sites only) |
+
+**Options:** `ringo_stripe_settings`, `ringo_checkout_addons`, `ringo_coupons`, `ringo_coupon_email_template`, `ringo_email_logs`.
+
+**Boat meta** is prefixed `_ringo_` (for example `_ringo_checkout_status`, `_ringo_amount`, `_ringo_coupon_code`, `_ringo_draft_failure_history`). The native form also keeps the existing seller and boat meta names, and writes both `motor_hours` and `engine_hours` for compatibility.
+
+**Taxonomies used:** `boatlength`, `boatcategories`, `boat-ownership`, `boat-status`, `boat-year`, `motor-make`, `motor-year`, `state`, `boat-make`.
+
+**AJAX actions** are registered for form submission, payment preparation, Stripe intents, PayPal order create and capture, coupon validation, image processing and failure reporting. They live in `frontend/ajax-*.php` and `frontend/native-forms.php`.
+
+## Updates
+
+The plugin checks this repository for new versions using [Plugin Update Checker](https://github.com/YahnisElsts/plugin-update-checker), configured in `includes/updater.php`. It reads the `Version:` line in `ringo-stripe-paypal-checkout.php` on the `main` branch.
+
+- **To release an update:** bump `Version:` in the plugin header and `RINGO_CHECKOUT_VERSION`, then merge to `main`. Every site running the plugin will then offer the update.
+- **Do not change the version number casually.** Merging to `main` with a higher version makes every installed site offer an update, including production.
+- If this repository is ever made **private**, the updater needs a read-only GitHub token, otherwise sites silently stop seeing updates. Keep the token in `wp-config.php`, not in the repository.
+
+## Project layout
+
+```
+ringo-stripe-paypal-checkout.php   plugin header, constants, loader, activation
+unpaid-boats-cron.php              unpaid-boat reminder job
+includes/                          settings, helpers, Stripe, PayPal, add-ons, payment logic, updater
+frontend/                          native forms, AJAX endpoints, thank-you page, assets
+admin/                             menu, settings, payments, add-ons, logs, coupons, widget
+emails/                            customer, admin, abandoned and failure email templates
+cron/                              abandoned-checkout checker
+vendor/                            Stripe SDK and Plugin Update Checker (bundled)
+```
+
+## More documentation
+
+- [`ADDON-MODULE.md`](ADDON-MODULE.md): add-on types, limits and the published-boat flow
+- [`NATIVE-FORM-MIGRATION.md`](NATIVE-FORM-MIGRATION.md): the move from JetFormBuilder to native forms, taxonomy and meta preserved, and a staging test order
+- [`DRAFT-FAILURE-MONITORING.md`](DRAFT-FAILURE-MONITORING.md): failure conditions, recipients and email behavior
+
+---
+
+Maintained by [Ringo Media](https://ringomedia.com/).
