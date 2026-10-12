@@ -9,7 +9,7 @@
  * Author URI:   https://ringomedia.com/
  * License:      GPL-2.0-or-later
  * Text Domain:  ringo-checkout
- * Update URI:   https://github.com/ammar458/Ringo-Checkout
+ * Update URI:   https://github.com/ringomedia-code/Ringo-Checkout
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

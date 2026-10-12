@@ -16,7 +16,7 @@ require_once RINGO_CHECKOUT_DIR . 'vendor/plugin-update-checker/plugin-update-ch
 use YahnisElsts\PluginUpdateChecker\v5\PucFactory;
 
 $ringo_update_checker = PucFactory::buildUpdateChecker(
-	'https://github.com/ammar458/Ringo-Checkout',
+	'https://github.com/ringomedia-code/Ringo-Checkout',
 	RINGO_CHECKOUT_FILE,
 	'ringo-checkout'
 );
