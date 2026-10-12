@@ -103,7 +103,7 @@ function ringo_send_publish_email( $post_id, $package_name, $package_price ) {
 
 	$headers = [
 		'Content-Type: text/html; charset=UTF-8',
-		'From: Bassboat4sale <info@bassboat4sale.com>',
+		'From: Bassboat4sale <ammar@ringomedia.com>',
 	];
 
 	$sent = wp_mail( $to, $subject, $html, $headers );

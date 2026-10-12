@@ -83,6 +83,7 @@ function ringo_enqueue_frontend_assets() {
 			'paypalClientId'=> (string) ( $pp['client_id'] ?? '' ),
 			'paypalMode'    => (string) ( $pp['mode'] ?? 'sandbox' ),
 			'isAdmin'       => current_user_can( 'administrator' ),
+			'isDealer'      => '' !== ringo_user_dealer_package(),
 		] ) . ';',
 		'before'
 	);
@@ -361,6 +362,14 @@ jQuery(function($){
       return;
     }
 
+    // Dealer / Dealer Plus accounts pay for their plan outside the site. With no paid add-on
+    // selected there is nothing to charge, so skip the payment popup; the server publishes
+    // the listing and the on-success handler redirects.
+    if (window.ringoPay && window.ringoPay.isDealer && !addonIds) {
+      showLoaderZeroDelay();
+      return;
+    }
+
     // ✨ Show payment chooser immediately with boatPostId pending
     showChooserInstant({
       packageName : packageName,
@@ -603,6 +612,7 @@ jQuery(function($){
       });
       $('#ringoAddonTotal').text(formatMoney(total));
       $('#ringoAddonGrandTotal').text(formatMoney(ctx.basePackagePrice + total));
+      if (window.ringoPay && window.ringoPay.isDealer) $('#ringoContinueAddons').text(ids.length ? 'Continue to Payment' : 'Publish Boat');
       return { ids: ids, total: total };
     }
 
@@ -619,6 +629,20 @@ jQuery(function($){
       ctx.couponLabel = '';
       ctx.addonsReviewed = true;
       if (ringoPendingFormData) ringoPendingFormData.addonIds = result.ids;
+      // Dealer with no paid add-on left: nothing to pay, so publish instead of showing a $0 popup.
+      if (window.ringoPay && window.ringoPay.isDealer && !result.ids.length) {
+        $('#ringoPayOverlay').remove();
+        showLoaderZeroDelay();
+        // The draft ID may still be coming back from the first request: wait for it.
+        onBoatPostIdReady(function(readyId){
+          ctx.boatPostId = readyId;
+          $.post(window.ringoPay.ajaxUrl, { action:'ringo_dealer_publish_free', nonce:window.ringoPay.nonceStripe, boat_post_id:readyId }, function(res){
+            if (res && res.success && res.data && res.data.redirect) { ringoPaymentComplete = true; ringoPaymentInProgress = false; window.location.href = res.data.redirect; }
+            else { hideLoader(); alert((res && res.data && res.data.message) || 'Could not publish the listing.'); }
+          }).fail(function(){ hideLoader(); alert('Request failed. Please try again.'); });
+        });
+        return;
+      }
       $('#ringoPayOverlay').remove();
       next(ctx);
     }
@@ -640,7 +664,7 @@ jQuery(function($){
     if (!ctx.originalPrice) ctx.originalPrice = ctx.packagePrice;
     ctx.couponCode = ctx.couponCode || '';
 
-    var safePkg      = $('<div>').text(ctx.packageName || '').html();
+    var safePkg      = window.ringoPay && window.ringoPay.isDealer ? 'Listing add-ons' : $('<div>').text(ctx.packageName || '').html();
     var priceDisplay = '<strong>' + formatMoney(ctx.packagePrice) + '</strong>';
     var editAddonsButton = getAddonCatalog().length && !ctx.addonsLocked
       ? '<button type="button" id="ringoEditAddons" style="margin-top:9px;padding:0;border:0;background:transparent;color:#0876b9;text-decoration:underline;cursor:pointer;font-size:13px;font-weight:700;">Edit add-ons</button>'
@@ -705,7 +729,7 @@ jQuery(function($){
         if (!res || !res.success || !res.data){ showCouponMsg((res&&res.data&&res.data.message)?res.data.message:'Invalid coupon',true); return; }
         ctx.couponCode   = code;
         ctx.couponLabel  = res.data.label || code;
-        ctx.packagePrice = res.data.final_price || ctx.packagePrice;
+        ctx.packagePrice = (res.data.final_price !== undefined && res.data.final_price !== null && res.data.final_price !== '') ? parseFloat(res.data.final_price) : ctx.packagePrice;
         $('#ringoPriceDisplay').html('Total: <span style="text-decoration:line-through;color:#999;">'+formatMoney(ctx.originalPrice)+'</span> <strong style="color:#0a0;">'+formatMoney(ctx.packagePrice)+'</strong> <span style="color:#0a0;font-size:12px;">('+$('<div>').text(ctx.couponLabel||'').html()+')</span>');
         showCouponMsg('Coupon applied!', false);
       }).fail(function(){ showCouponMsg('Server error checking coupon', true); });
@@ -751,7 +775,7 @@ jQuery(function($){
     if (!ctx.originalPrice) ctx.originalPrice = ctx.packagePrice;
     ctx.couponCode = ctx.couponCode || '';
 
-    var safePkg = $('<div>').text(ctx.packageName || '').html();
+    var safePkg = window.ringoPay && window.ringoPay.isDealer ? 'Listing add-ons' : $('<div>').text(ctx.packageName || '').html();
     var editAddonsButton = getAddonCatalog().length && !ctx.addonsLocked
       ? '<button type="button" id="ringoEditAddons" style="margin-top:9px;padding:0;border:0;background:transparent;color:#0876b9;text-decoration:underline;cursor:pointer;font-size:13px;font-weight:700;">Edit add-ons</button>'
       : '';
@@ -825,7 +849,7 @@ jQuery(function($){
         }
         ctx.couponCode = code;
         ctx.couponLabel = res.data.label || code;
-        ctx.packagePrice = res.data.final_price || ctx.packagePrice;
+        ctx.packagePrice = (res.data.final_price !== undefined && res.data.final_price !== null && res.data.final_price !== '') ? parseFloat(res.data.final_price) : ctx.packagePrice;
         $('#ringoPriceDisplay').html('Total: <span style="text-decoration:line-through;color:#999;">' + formatMoney(ctx.originalPrice) + '</span> <strong style="color:#0a0;">' + formatMoney(ctx.packagePrice) + '</strong> <span style="color:#0a0;font-size:12px;">(' + $('<div>').text(ctx.couponLabel||'').html() + ')</span>');
         showCouponMsg('Coupon applied!', false);
       }).fail(function(){
@@ -856,7 +880,7 @@ jQuery(function($){
     ringoPaymentInProgress = true;
     touchPaymentState('stripe_modal_open', 'stripe');
 
-    var safePkg = $('<div>').text(ctx.packageName || '').html();
+    var safePkg = window.ringoPay && window.ringoPay.isDealer ? 'Listing add-ons' : $('<div>').text(ctx.packageName || '').html();
 
     var html = '<div id="ringoStripeOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999999;display:flex;align-items:center;justify-content:center;padding:12px;overflow-y:auto;">' +
       '<div style="width:100%;max-width:460px;background:#fff;border-radius:10px;padding:20px;font-family:Arial;box-sizing:border-box;">' +
@@ -865,8 +889,9 @@ jQuery(function($){
           '<div style="font-weight:700;color:#111;text-transform:uppercase;">' + safePkg + '</div>' +
           '<div style="color:#444;margin-top:4px;">Total: <strong>' + formatMoney(ctx.packagePrice) + '</strong></div>' +
           renderSelectedAddonSummary(ctx) +
+          (window.ringoPay && window.ringoPay.isDealer ? '' :
           '<div style="margin-top:10px;"><div style="font-weight:700;color:#111;margin-bottom:6px;font-size:12px;">Package Description</div>' +
-          '<div>' + renderPkgDescBullets(ctx.packageDesc || '') + '</div></div>' +
+          '<div>' + renderPkgDescBullets(ctx.packageDesc || '') + '</div></div>') +
         '</div>' +
         '<div id="card-number" style="border:1px solid #ddd;border-radius:6px;padding:10px;margin-bottom:12px;background:#fff;"></div>' +
         '<div id="card-expiry" style="border:1px solid #ddd;border-radius:6px;padding:10px;margin-bottom:12px;background:#fff;"></div>' +
@@ -931,6 +956,13 @@ jQuery(function($){
           nonce:         window.ringoPay.nonceStripe
         }
       }).done(function(res){
+        // 100%-off coupon: the server already completed the listing, no card needed.
+        if (res && res.success && res.data && res.data.free_checkout && res.data.redirect){
+          ringoPaymentComplete = true;
+          ringoPaymentInProgress = false;
+          window.location.href = res.data.redirect;
+          return;
+        }
         if (!res || !res.success || !res.data || !res.data.client_secret){
           var startMessage = (res && res.data && res.data.message) ? res.data.message : 'Could not start payment.';
           $('#ringoStripePayBtn').prop('disabled', false).css('opacity', 1);
@@ -1039,7 +1071,7 @@ jQuery(function($){
     ringoPaymentInProgress = true;
     touchPaymentState('paypal_modal_open', 'paypal');
 
-    var safePkg = $('<div>').text(ctx.packageName || '').html();
+    var safePkg = window.ringoPay && window.ringoPay.isDealer ? 'Listing add-ons' : $('<div>').text(ctx.packageName || '').html();
 
     var html = '<div id="ringoPayPalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999999;display:flex;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto;">' +
       '<div style="width:100%;max-width:960px;background:#fff;border-radius:10px;padding:16px;font-family:Arial;margin:auto;box-sizing:border-box;">' +
@@ -1047,12 +1079,13 @@ jQuery(function($){
         '<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">' +
           '<div style="flex:1;min-width:240px;">' +
             '<div style="border:1px solid #eee;border-radius:8px;padding:12px;background:#fafafa;">' +
-              '<div style="font-weight:700;color:#111;margin-bottom:6px;">Package Name</div>' +
+              (window.ringoPay && window.ringoPay.isDealer ? '' : '<div style="font-weight:700;color:#111;margin-bottom:6px;">Package Name</div>') +
               '<div style="font-weight:700;color:#111;text-transform:uppercase;">' + safePkg + '</div>' +
               '<div style="margin-top:4px;color:#444;">Total: <strong>' + formatMoney(ctx.packagePrice) + '</strong></div>' +
               renderSelectedAddonSummary(ctx) +
+              (window.ringoPay && window.ringoPay.isDealer ? '' :
               '<div style="margin-top:10px;"><div style="font-weight:700;color:#111;margin-bottom:6px;">Package Description</div>' +
-              '<div>' + renderPkgDescBullets(ctx.packageDesc || '') + '</div></div>' +
+              '<div>' + renderPkgDescBullets(ctx.packageDesc || '') + '</div></div>') +
             '</div>' +
             '<div style="margin-top:14px;">' +
               '<button type="button" id="ringoPayPalBack" style="width:100%;padding:10px 12px;border:1px solid #333;background:#fff;color:#111;border-radius:6px;cursor:pointer;">← Back</button>' +
@@ -1099,6 +1132,13 @@ jQuery(function($){
             nonce:         window.ringoPay.noncePaypal
           }
         }).then(function(res){
+          // 100%-off coupon: the server already completed the listing, no PayPal order needed.
+          if (res && res.success && res.data && res.data.free_checkout && res.data.redirect){
+            ringoPaymentComplete = true;
+            ringoPaymentInProgress = false;
+            window.location.href = res.data.redirect;
+            return new Promise(function(){});
+          }
           if (!res || !res.success || !res.data || !res.data.order_id){
             var message = (res && res.data && res.data.message) ? res.data.message : 'Could not start PayPal checkout.';
             showPPMsg(message);
@@ -1207,6 +1247,17 @@ jQuery(function($){
     }
 
     if (!boatPostId){ hideLoader(); alert('Boat post ID is missing. Please contact support.'); return; }
+
+    // Dealer listing with no paid add-ons: already published server-side, nothing to pay.
+    if (response && response.data && response.data.dealer_free && response.data.redirect) {
+      ringoPendingFormData = null;
+      ringoPaymentComplete = true;
+      ringoPaymentInProgress = false;
+      var dealerRedirect = response.data.redirect;
+      // Let the background image upload start first so the redirect waits for it.
+      window.setTimeout(function(){ redirectAfterNativeAssets(dealerRedirect); }, 150);
+      return;
+    }
 
     // Get package data (from click-capture or DOM fallback)
     var packageName, packagePrice, userEmail, addonIds, addonsReviewed;

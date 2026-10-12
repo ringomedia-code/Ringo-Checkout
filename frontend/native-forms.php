@@ -23,6 +23,39 @@ add_action( 'wp_ajax_ringo_native_submit_boat', 'ringo_ajax_native_submit_boat' 
 add_action( 'wp_ajax_ringo_native_finalize_boat_assets', 'ringo_ajax_native_finalize_boat_assets' );
 add_action( 'wp_ajax_ringo_native_update_boat', 'ringo_ajax_native_update_boat' );
 add_action( 'wp_ajax_ringo_native_prepare_payment', 'ringo_ajax_native_prepare_payment' );
+add_action( 'wp_ajax_ringo_dealer_publish_free', 'ringo_ajax_dealer_publish_free' );
+
+/**
+ * AJAX: publish a dealer's unpaid draft once no paid add-on is left (the dealer pressed Pay
+ * Now and then removed the add-on). Nothing is charged.
+ *
+ * @return void
+ */
+function ringo_ajax_dealer_publish_free() {
+	if ( ! is_user_logged_in() ) {
+		wp_send_json_error( [ 'message' => 'Please sign in first.' ], 401 );
+	}
+	if ( ! isset( $_POST['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['nonce'] ) ), 'ringo_stripe_intent_nonce' ) ) {
+		wp_send_json_error( [ 'message' => 'Security check failed. Refresh the page and try again.' ], 403 );
+	}
+	$post_id = isset( $_POST['boat_post_id'] ) ? absint( $_POST['boat_post_id'] ) : 0;
+	if ( ! $post_id || ! ringo_native_user_can_access_boat( $post_id ) ) {
+		wp_send_json_error( [ 'message' => 'You do not have permission to publish this listing.' ], 403 );
+	}
+	if ( ! ringo_boat_is_open_for_payment( $post_id ) ) {
+		wp_send_json_error( [ 'message' => 'This listing is already paid or no longer a draft.' ], 409 );
+	}
+	$package = ringo_user_dealer_package( (int) get_post_field( 'post_author', $post_id ) );
+	if ( ! $package || ! ringo_checkout_base_waived( $package, $post_id ) ) {
+		wp_send_json_error( [ 'message' => 'This listing needs a payment.' ], 422 );
+	}
+	ringo_save_boat_addons( $post_id, [], 0 );
+	$url = ringo_native_publish_dealer_listing( $post_id, $package );
+	if ( ! $url ) {
+		wp_send_json_error( [ 'message' => 'Could not publish the listing. Please contact support.' ], 500 );
+	}
+	wp_send_json_success( [ 'redirect' => $url ] );
+}
 add_action( 'wp_enqueue_scripts', 'ringo_native_enqueue_assets', 30 );
 add_action( 'save_post_boats', 'ringo_native_sync_legacy_post_id_meta', 20, 3 );
 add_action( 'admin_init', 'ringo_native_backfill_legacy_post_id_meta' );
@@ -52,7 +85,7 @@ function ringo_native_sync_legacy_post_id_meta( $post_id, $post = null, $update 
 		$post = get_post( $post_id );
 	}
 
-	if ( ! $post || 'boats' !== $post->post_type ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		return;
 	}
 
@@ -336,12 +369,74 @@ function ringo_native_package_image_limits() {
 	return apply_filters(
 		'ringo_native_package_image_limits',
 		[
-			'standard' => 4,
-			'featured' => 10,
-			'vip'      => 25,
-			'pro'      => 25,
+			'standard'    => 4,
+			'featured'    => 10,
+			'vip'         => 25,
+			'pro'         => 25,
+			'dealer'      => 12,
+			'dealer_plus' => 25,
 		]
 	);
+}
+
+/**
+ * Package keys the signed-in user may submit: the four seller packages, plus their own
+ * dealer key when they are a Dealer / Dealer Plus account.
+ *
+ * @param int $user_id User ID (0 = current user).
+ * @return string[]
+ */
+function ringo_native_valid_packages( $user_id = 0 ) {
+	$valid  = [ 'standard', 'featured', 'vip', 'pro' ];
+	$dealer = ringo_user_dealer_package( $user_id );
+	if ( $dealer ) {
+		$valid[] = $dealer;
+	}
+	return $valid;
+}
+
+/**
+ * Publish a dealer listing that has no paid add-ons. Dealers pay for their plan outside
+ * the site, so nothing is charged and no payment popup is shown. Returns the thank-you
+ * URL on success, or '' when this listing still needs a payment.
+ *
+ * @param int    $post_id Boat ID.
+ * @param string $package Dealer package key.
+ * @return string
+ */
+function ringo_native_publish_dealer_listing( $post_id, $package ) {
+	if ( ! ringo_package_is_dealer( $package ) || ! ringo_checkout_base_waived( $package, $post_id ) ) {
+		return '';
+	}
+	if ( ringo_get_boat_addon_ids( $post_id ) ) {
+		return '';
+	}
+	if ( ! ringo_process_paid( $post_id, 'dealer', 'dealer-' . (int) $post_id, $package, 0 ) ) {
+		return '';
+	}
+	update_post_meta( $post_id, '_ringo_amount', 0 );
+	ringo_log( 'Dealer listing published without payment', [ 'post_id' => (int) $post_id, 'package' => $package ] );
+	return home_url( '/thank-you/?provider=dealer&boat_post_id=' . (int) $post_id );
+}
+
+/**
+ * Administrators publish straight away: no payment, whatever package or add-ons they pick.
+ * Returns the thank-you URL, or '' for everyone else.
+ *
+ * @param int    $post_id Boat ID.
+ * @param string $package Package key.
+ * @return string
+ */
+function ringo_native_publish_admin_listing( $post_id, $package ) {
+	if ( ! current_user_can( 'administrator' ) ) {
+		return '';
+	}
+	if ( ! ringo_process_paid( $post_id, 'admin', 'admin-bypass-' . get_current_user_id(), $package, 0 ) ) {
+		return '';
+	}
+	update_post_meta( $post_id, '_ringo_amount', 0 );
+	ringo_log( 'Admin listing published without payment', [ 'post_id' => (int) $post_id, 'package' => $package ] );
+	return home_url( '/thank-you/?provider=admin&boat_post_id=' . (int) $post_id );
 }
 
 /**
@@ -371,10 +466,12 @@ function ringo_native_package_video_limits() {
 	return apply_filters(
 		'ringo_native_package_video_limits',
 		[
-			'standard' => 0,
-			'featured' => 1,
-			'vip'      => 2,
-			'pro'      => 2,
+			'standard'    => 0,
+			'featured'    => 1,
+			'vip'         => 2,
+			'pro'         => 2,
+			'dealer'      => 1,
+			'dealer_plus' => 1,
 		]
 	);
 }
@@ -446,13 +543,16 @@ function ringo_native_submission_shortcode() {
 		return ringo_native_login_required_message();
 	}
 
-	$user     = wp_get_current_user();
-	$settings = ringo_get_settings();
-	$package  = ringo_normalize_package_key( (string) get_user_meta( $user->ID, 'package_name', true ) );
+	$user           = wp_get_current_user();
+	$settings       = ringo_get_settings();
+	$dealer_package = ringo_user_dealer_package( $user->ID );
+	$is_dealer      = '' !== $dealer_package;
+	$package        = $is_dealer ? $dealer_package : ringo_normalize_package_key( (string) get_user_meta( $user->ID, 'package_name', true ) );
 
-	if ( ! in_array( $package, [ 'standard', 'featured', 'vip', 'pro' ], true ) ) {
+	if ( ! $is_dealer && ! in_array( $package, [ 'standard', 'featured', 'vip', 'pro' ], true ) ) {
 		$package = 'standard';
 	}
+	$package_keys = $is_dealer ? [ $dealer_package ] : [ 'standard', 'featured', 'vip', 'pro' ];
 
 	$phone               = ringo_native_format_phone( (string) get_user_meta( $user->ID, 'phone', true ) );
 	$motor_year_taxonomy = taxonomy_exists( 'motor-year' ) ? 'motor-year' : 'boat-year';
@@ -471,11 +571,15 @@ function ringo_native_submission_shortcode() {
 			<div>
 				<span class="ringo-native-form-eyebrow">Sell Your Boat</span>
 				<h1>Create Your Boat Listing</h1>
-				<p>Add clear details and strong photos. Your listing will stay in Draft until payment is completed.</p>
+				<?php if ( $is_dealer ) : ?>
+					<p>Add clear details and strong photos. Your listing is published as soon as you submit it.</p>
+				<?php else : ?>
+					<p>Add clear details and strong photos. Your listing will stay in Draft until payment is completed.</p>
+				<?php endif; ?>
 			</div>
 			<div class="ringo-native-required-note"><strong>*</strong> Required fields</div>
 		</div>
-		<form class="ringo-native-boat-form" data-form-id="1204" method="post" enctype="multipart/form-data" novalidate>
+		<form class="ringo-native-boat-form" data-form-id="1204" <?php echo $is_dealer ? 'data-ringo-dealer="1"' : ''; ?> <?php echo current_user_can( 'administrator' ) ? 'data-ringo-admin="1"' : ''; ?> method="post" enctype="multipart/form-data" novalidate>
 			<input type="hidden" name="action" value="ringo_native_submit_boat">
 			<input type="hidden" name="nonce" value="<?php echo esc_attr( wp_create_nonce( 'ringo_native_form_nonce' ) ); ?>">
 			<input type="hidden" name="package_name" value="<?php echo esc_attr( $package ); ?>">
@@ -488,14 +592,19 @@ function ringo_native_submission_shortcode() {
 			<div class="ringo-native-addon-gate" data-ringo-addon-gate>
 				<div class="ringo-native-addon-gate-head">
 					<span class="ringo-native-form-eyebrow">Step 1</span>
-					<h2>Choose Your Package and Optional Add-ons</h2>
-					<p>Form add-ons immediately change the fields and limits available in your listing form.</p>
+					<?php if ( $is_dealer ) : ?>
+						<h2>Choose Optional Add-ons</h2>
+						<p>Your listing is published right away. A payment popup only appears if you choose a paid add-on.</p>
+					<?php else : ?>
+						<h2>Choose Your Package and Optional Add-ons</h2>
+						<p>Form add-ons immediately change the fields and limits available in your listing form.</p>
+					<?php endif; ?>
 				</div>
 
-				<label class="ringo-native-field ringo-native-package-picker">
+				<label class="ringo-native-field ringo-native-package-picker"<?php echo $is_dealer ? ' hidden style="display:none"' : ''; ?>>
 					<span>Listing Package <strong>*</strong></span>
 					<select name="package" required data-ringo-package-select>
-						<?php foreach ( [ 'standard', 'featured', 'vip', 'pro' ] as $key ) : ?>
+						<?php foreach ( $package_keys as $key ) : ?>
 							<option
 								value="<?php echo esc_attr( $key ); ?>"
 								data-price="<?php echo esc_attr( isset( $prices[ $key ] ) ? (float) $prices[ $key ] : 0 ); ?>"
@@ -537,9 +646,13 @@ function ringo_native_submission_shortcode() {
 				<?php endif; ?>
 
 				<div class="ringo-native-addon-summary">
-					<div><span>Package</span><strong data-ringo-package-total>$0.00</strong></div>
+					<?php if ( ! $is_dealer ) : ?>
+						<div><span>Package</span><strong data-ringo-package-total>$0.00</strong></div>
+					<?php endif; ?>
 					<div><span>Add-ons</span><strong data-ringo-addon-total>$0.00</strong></div>
-					<div class="ringo-native-addon-grand-total"><span>Checkout total</span><strong data-ringo-grand-total>$0.00</strong></div>
+					<?php if ( ! $is_dealer ) : ?>
+						<div class="ringo-native-addon-grand-total"><span>Checkout total</span><strong data-ringo-grand-total>$0.00</strong></div>
+					<?php endif; ?>
 					<div class="ringo-native-capability-summary" data-ringo-capability-summary></div>
 				</div>
 				<button type="button" class="ringo-native-submit ringo-native-start-form" data-ringo-start-form>Continue to Boat Form</button>
@@ -549,14 +662,14 @@ function ringo_native_submission_shortcode() {
 			<div class="ringo-native-section">
 				<div class="ringo-native-section-head">
 					<span class="ringo-native-section-number">1</span>
-					<div class="ringo-native-section-copy"><h2>Listing Basics</h2><p>Choose the package and add a clear title and description.</p></div>
+					<div class="ringo-native-section-copy"><h2>Listing Basics</h2><p><?php echo $is_dealer ? 'Add a clear title and description.' : 'Choose the package and add a clear title and description.'; ?></p></div>
 				</div>
 				<div class="ringo-native-selected-options">
 					<div>
 						<span>Selected checkout</span>
 						<strong data-ringo-selected-options-summary></strong>
 					</div>
-					<button type="button" data-ringo-edit-options>Change package or add-ons</button>
+					<button type="button" data-ringo-edit-options><?php echo $is_dealer ? 'Change add-ons' : 'Change package or add-ons'; ?></button>
 				</div>
 
 				<label class="ringo-native-field">
@@ -746,7 +859,7 @@ function ringo_native_get_boat_gallery_ids( $post_id ) {
  */
 function ringo_native_boat_is_paid( $post_id ) {
 	$post = get_post( $post_id );
-	if ( ! $post || 'boats' !== $post->post_type ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		return false;
 	}
 
@@ -768,8 +881,14 @@ function ringo_native_existing_boat_package( $post_id, $user_id ) {
 	$package = ringo_normalize_package_key( (string) get_post_meta( $post_id, '_ringo_package', true ) );
 	$valid   = [ 'standard', 'featured', 'vip', 'pro' ];
 
-	if ( in_array( $package, $valid, true ) ) {
+	if ( in_array( $package, $valid, true ) || ringo_checkout_base_waived( $package, $post_id ) ) {
 		return $package;
+	}
+
+	// Dealer-owned listings carry their dealer package even if the stored label is missing.
+	$dealer_package = ringo_user_dealer_package( (int) get_post_field( 'post_author', $post_id ) );
+	if ( $dealer_package ) {
+		return $dealer_package;
 	}
 
 	$terms = wp_get_object_terms( $post_id, 'boatcategories' );
@@ -828,7 +947,7 @@ function ringo_native_edit_shortcode() {
 	$post_id = isset( $_GET['_post_id'] ) ? absint( wp_unslash( $_GET['_post_id'] ) ) : 0;
 	$post    = $post_id ? get_post( $post_id ) : null;
 
-	if ( ! $post || 'boats' !== $post->post_type ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		return '<div class="ringo-native-notice ringo-native-error">Boat listing not found.</div>';
 	}
 	if ( ! ringo_native_user_can_access_boat( $post_id ) ) {
@@ -1096,14 +1215,14 @@ function ringo_native_resolve_pay_now_post_id( $atts = [] ) {
 	if ( ! $post_id ) {
 		$loop_id = get_the_ID();
 		$loop    = $loop_id ? get_post( $loop_id ) : null;
-		if ( $loop && 'boats' === $loop->post_type ) {
+		if ( $loop && ringo_is_boat_post_type( $loop->post_type ) ) {
 			$post_id = (int) $loop->ID;
 		}
 	}
 
 	if ( ! $post_id ) {
 		global $post;
-		if ( $post instanceof WP_Post && 'boats' === $post->post_type ) {
+		if ( $post instanceof WP_Post && ringo_is_boat_post_type( $post->post_type ) ) {
 			$post_id = (int) $post->ID;
 		}
 	}
@@ -1134,7 +1253,7 @@ function ringo_native_pay_now_shortcode( $atts = [] ) {
 
 	// Listing templates may render the shortcode without a valid boat context.
 	// Stay silent so account cards never show an error notice.
-	if ( ! $post || 'boats' !== $post->post_type ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		return '';
 	}
 
@@ -1152,10 +1271,10 @@ function ringo_native_pay_now_shortcode( $atts = [] ) {
 	$user         = wp_get_current_user();
 	$package_name = ringo_normalize_package_key( (string) get_post_meta( $post_id, '_ringo_package', true ) );
 
-	if ( ! in_array( $package_name, [ 'standard', 'featured', 'vip', 'pro' ], true ) ) {
+	if ( ! in_array( $package_name, [ 'standard', 'featured', 'vip', 'pro' ], true ) && ! ringo_checkout_base_waived( $package_name, $post_id ) ) {
 		$package_name = ringo_normalize_package_key( (string) get_user_meta( $user->ID, 'package_name', true ) );
 	}
-	if ( ! in_array( $package_name, [ 'standard', 'featured', 'vip', 'pro' ], true ) ) {
+	if ( ! in_array( $package_name, [ 'standard', 'featured', 'vip', 'pro' ], true ) && ! ringo_checkout_base_waived( $package_name, $post_id ) ) {
 		$package_name = 'standard';
 	}
 
@@ -1200,7 +1319,7 @@ function ringo_native_pay_now_shortcode( $atts = [] ) {
  */
 function ringo_native_user_can_access_boat( $post_id ) {
 	$post = get_post( $post_id );
-	if ( ! $post || 'boats' !== $post->post_type || ! is_user_logged_in() ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) || ! is_user_logged_in() ) {
 		return false;
 	}
 
@@ -1265,10 +1384,12 @@ function ringo_native_package_category_term_id( $package ) {
 	$map = apply_filters(
 		'ringo_native_package_category_map',
 		[
-			'standard' => 415,
-			'featured' => 416,
-			'vip'      => 417,
-			'pro'      => 418,
+			'standard'    => 415,
+			'featured'    => 416,
+			'vip'         => 417,
+			'pro'         => 418,
+			'dealer'      => 419,
+			'dealer_plus' => 419,
 		]
 	);
 
@@ -1479,6 +1600,12 @@ function ringo_ajax_native_submit_boat() {
 	$fast_phase = ! empty( $_POST['ringo_fast_phase'] );
 
 	$package   = ringo_normalize_package_key( ringo_native_post_text( 'package' ) );
+	// Dealer / Dealer Plus accounts always submit under their own plan, whatever the browser sent.
+	$dealer_package = ringo_user_dealer_package( $user_id );
+	$is_dealer      = '' !== $dealer_package;
+	if ( $is_dealer ) {
+		$package = $dealer_package;
+	}
 	$addon_ids = ringo_calculate_addons( $_POST['addon_ids'] ?? [] )['ids']; // phpcs:ignore WordPress.Security.NonceVerification.Missing
 	$title     = ringo_native_post_text( 'title' );
 	$content   = ringo_native_post_content( 'content' );
@@ -1509,7 +1636,7 @@ function ringo_ajax_native_submit_boat() {
 		}
 	}
 
-	if ( ! in_array( $package, [ 'standard', 'featured', 'vip', 'pro' ], true ) ) {
+	if ( ! in_array( $package, ringo_native_valid_packages( $user_id ), true ) ) {
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'Please select a valid package.' ], 422 );
 	}
@@ -1568,7 +1695,7 @@ function ringo_ajax_native_submit_boat() {
 
 	$post_id = wp_insert_post(
 		[
-			'post_type'    => 'boats',
+			'post_type'    => $is_dealer ? 'dlr_boats' : 'boats',
 			'post_status'  => 'draft',
 			'post_title'   => $title,
 			'post_content' => $content,
@@ -1611,7 +1738,7 @@ function ringo_ajax_native_submit_boat() {
 		wp_send_json_error( [ 'message' => $category_result->get_error_message() ], 500 );
 	}
 
-	$ownership_result = ringo_native_assign_term( $post_id, 'boat-ownership', 4, true );
+	$ownership_result = ringo_native_assign_term( $post_id, 'boat-ownership', $is_dealer ? 5 : 4, true );
 	if ( is_wp_error( $ownership_result ) ) {
 		ringo_native_cleanup_failed_submission( $post_id, $attachments );
 		delete_transient( $lock );
@@ -1667,7 +1794,9 @@ function ringo_ajax_native_submit_boat() {
 		update_user_meta( $user_id, 'first_name', $first );
 		update_user_meta( $user_id, 'last_name', $last );
 		update_user_meta( $user_id, 'phone', $phone );
-		update_user_meta( $user_id, 'package_name', $package );
+		if ( ! $is_dealer ) {
+			update_user_meta( $user_id, 'package_name', $package );
+		}
 
 		$role_map = [
 			'standard' => 'standard',
@@ -1691,6 +1820,9 @@ function ringo_ajax_native_submit_boat() {
 			]
 		);
 
+		// Dealers with no paid add-ons are published straight away: no payment popup.
+		$dealer_redirect = $is_dealer ? ringo_native_publish_dealer_listing( $post_id, $package ) : ringo_native_publish_admin_listing( $post_id, $package );
+
 		delete_transient( $lock );
 		wp_send_json_success(
 			[
@@ -1701,6 +1833,8 @@ function ringo_ajax_native_submit_boat() {
 				'uploaded_file_ids' => [],
 				'assets_background' => true,
 				'payment_started'   => true,
+				'dealer_free'       => '' !== $dealer_redirect,
+				'redirect'          => $dealer_redirect,
 				'ringo_native'      => true,
 			]
 		);
@@ -1733,7 +1867,9 @@ function ringo_ajax_native_submit_boat() {
 	update_user_meta( $user_id, 'first_name', $first );
 	update_user_meta( $user_id, 'last_name', $last );
 	update_user_meta( $user_id, 'phone', $phone );
-	update_user_meta( $user_id, 'package_name', $package );
+	if ( ! $is_dealer ) {
+		update_user_meta( $user_id, 'package_name', $package );
+	}
 
 	$role_map = [
 		'standard' => 'standard',
@@ -1758,6 +1894,9 @@ function ringo_ajax_native_submit_boat() {
 		]
 	);
 
+	// Dealers with no paid add-ons are published straight away: no payment popup.
+	$dealer_redirect = $is_dealer ? ringo_native_publish_dealer_listing( $post_id, $package ) : ringo_native_publish_admin_listing( $post_id, $package );
+
 	delete_transient( $lock );
 	wp_send_json_success(
 		[
@@ -1767,6 +1906,8 @@ function ringo_ajax_native_submit_boat() {
 			'package_price'     => $package_price,
 			'uploaded_file_ids' => array_values( array_map( 'absint', $attachments ) ),
 			'payment_started'   => true,
+			'dealer_free'       => '' !== $dealer_redirect,
+			'redirect'          => $dealer_redirect,
 			'ringo_native'      => true,
 		]
 	);
@@ -1793,7 +1934,7 @@ function ringo_ajax_native_finalize_boat_assets() {
 
 	$post_id = isset( $_POST['boat_post_id'] ) ? absint( $_POST['boat_post_id'] ) : 0;
 	$post    = $post_id ? get_post( $post_id ) : null;
-	if ( ! $post || 'boats' !== $post->post_type ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		wp_send_json_error( [ 'message' => 'Boat listing not found.' ], 404 );
 	}
 	if ( ! ringo_native_user_can_access_boat( $post_id ) ) {
@@ -1875,7 +2016,7 @@ function ringo_native_cleanup_edit_attachments( $attachment_ids ) {
  */
 function ringo_native_send_edit_notifications( $post_id ) {
 	$post = get_post( $post_id );
-	if ( ! $post || 'boats' !== $post->post_type ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		return;
 	}
 
@@ -1934,7 +2075,7 @@ function ringo_ajax_native_update_boat() {
 
 	$post_id = isset( $_POST['_post_id'] ) ? absint( $_POST['_post_id'] ) : 0;
 	$post    = $post_id ? get_post( $post_id ) : null;
-	if ( ! $post || 'boats' !== $post->post_type ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		wp_send_json_error( [ 'message' => 'Boat listing not found.' ], 404 );
 	}
 	if ( ! ringo_native_user_can_access_boat( $post_id ) ) {
@@ -2196,22 +2337,30 @@ function ringo_ajax_native_prepare_payment() {
 	$post_id = isset( $_POST['_post_id'] ) ? absint( $_POST['_post_id'] ) : 0;
 	$post    = $post_id ? get_post( $post_id ) : null;
 
-	if ( ! $post || 'boats' !== $post->post_type ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		wp_send_json_error( [ 'message' => 'Boat listing not found.' ], 404 );
 	}
 	if ( ! ringo_native_user_can_access_boat( $post_id ) ) {
 		wp_send_json_error( [ 'message' => 'You do not have permission to pay for this listing.' ], 403 );
 	}
-	if ( 'paid' === get_post_meta( $post_id, '_ringo_checkout_status', true ) ) {
+	if ( 'paid' === get_post_meta( $post_id, '_ringo_checkout_status', true ) || ringo_native_boat_is_paid( $post_id ) ) {
 		wp_send_json_error( [ 'message' => 'This listing is already paid.' ], 409 );
 	}
 
 	$package = ringo_normalize_package_key( (string) get_post_meta( $post_id, '_ringo_package', true ) );
-	if ( ! in_array( $package, [ 'standard', 'featured', 'vip', 'pro' ], true ) ) {
+	if ( ! in_array( $package, [ 'standard', 'featured', 'vip', 'pro' ], true ) && ! ringo_checkout_base_waived( $package, $post_id ) ) {
 		$package = ringo_normalize_package_key( ringo_native_post_text( 'package_name' ) );
 	}
-	if ( ! in_array( $package, [ 'standard', 'featured', 'vip', 'pro' ], true ) ) {
+	if ( ! in_array( $package, [ 'standard', 'featured', 'vip', 'pro' ], true ) && ! ringo_checkout_base_waived( $package, $post_id ) ) {
 		$package = 'standard';
+	}
+
+	// Administrators publish directly, with no payment.
+	if ( current_user_can( 'administrator' ) ) {
+		$free_url = ringo_native_publish_admin_listing( $post_id, $package );
+		if ( $free_url ) {
+			wp_send_json_success( [ 'inserted_post_id' => (string) $post_id, 'post_id' => (string) $post_id, 'package_name' => $package, 'package_price' => 0, 'payment_started' => true, 'dealer_free' => true, 'redirect' => $free_url, 'ringo_native' => true ] );
+		}
 	}
 
 	$amount = ringo_get_package_price( $package );
@@ -2367,6 +2516,7 @@ jQuery(function($){
     if (isNaN(baseImages) || baseImages < 1) baseImages = 4;
     if (isNaN(baseVideos) || baseVideos < 0) baseVideos = 0;
 
+    var isDealer = $form.is('[data-ringo-dealer]');
     var maxImages = Math.min(100, baseImages + addons.extraImages);
     var maxVideos = Math.min(10, baseVideos + addons.extraVideos);
     var grandTotal = price + addons.total;
@@ -2376,7 +2526,9 @@ jQuery(function($){
     $form.find('[name="addon_ids"]').val(addons.ids.join(','));
     $form.find('[name="addons_reviewed"]').val('1');
     $form.find('[data-ringo-gallery]').attr('data-max-files', maxImages);
-    $form.find('[data-ringo-gallery-help]').text('Maximum ' + maxImages + ' gallery images with this package and selected add-ons.');
+    $form.find('[data-ringo-gallery-help]').text(isDealer
+      ? 'Maximum ' + maxImages + ' gallery images' + (addons.ids.length ? ' with your selected add-ons.' : '.')
+      : 'Maximum ' + maxImages + ' gallery images with this package and selected add-ons.');
     $form.find('[data-ringo-package-description]').text(description);
     $form.find('[data-ringo-package-total]').text(formatMoney(price));
     $form.find('[data-ringo-addon-total]').text(formatMoney(addons.total));
@@ -2386,9 +2538,18 @@ jQuery(function($){
     capabilityParts.push(maxVideos === 0 ? 'No video URL fields' : maxVideos + ' video URL field' + (maxVideos === 1 ? '' : 's'));
     $form.find('[data-ringo-capability-summary]').text(capabilityParts.join(' | '));
 
-    var selectedSummary = key.toUpperCase() + ' | ' + formatMoney(grandTotal);
-    if (addons.names.length) selectedSummary += ' | ' + addons.names.join(', ');
+    var selectedSummary;
+    if (isDealer) {
+      selectedSummary = addons.names.length ? addons.names.join(', ') + ' | ' + formatMoney(addons.total) : 'No paid add-ons';
+    } else {
+      selectedSummary = key.toUpperCase() + ' | ' + formatMoney(grandTotal);
+      if (addons.names.length) selectedSummary += ' | ' + addons.names.join(', ');
+    }
     $form.find('[data-ringo-selected-options-summary]').text(selectedSummary);
+
+    // Nothing to pay for administrators, or for dealers with no paid add-on: the button publishes.
+    var publishesFree = $form.is('[data-ringo-admin]') || (isDealer && !addons.ids.length);
+    $form.find('button.ringo-native-submit').not('[data-ringo-start-form]').text(publishesFree ? 'Publish Boat' : 'Continue to Payment');
 
     $form.find('[data-ringo-video]').each(function(){
       var $field = $(this);

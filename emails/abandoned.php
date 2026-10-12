@@ -123,7 +123,7 @@ function ringo_send_payment_pending_customer_email( $post_id ) {
 		$to,
 		$subject,
 		$html,
-		[ 'Reply-To: info@bassboat4sale.com' ],
+		[ 'Reply-To: ammar@ringomedia.com' ],
 		$post_id
 	);
 
@@ -379,7 +379,7 @@ function ringo_send_payment_failed_customer_email( $post_id, $error_message = ''
 		$to,
 		$subject,
 		$html,
-		[ 'Reply-To: info@bassboat4sale.com' ],
+		[ 'Reply-To: ammar@ringomedia.com' ],
 		$post_id
 	);
 

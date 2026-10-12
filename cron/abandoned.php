@@ -49,7 +49,7 @@ function ringo_process_abandoned_checkouts() {
 	$abandoned_after = (int) ( $settings['abandoned_after'] ?? 1800 );
 
 	$q = new WP_Query( [
-		'post_type'      => 'boats',
+		'post_type'      => ringo_boat_post_types(),
 		'post_status'    => 'draft',
 		'posts_per_page' => 50,
 		'fields'         => 'ids',
@@ -155,14 +155,9 @@ function ringo_cron_handle_stripe( $post_id, $stripe_ready ) {
 
 		if ( 'succeeded' === $status ) {
 			$package_name  = (string) ( $intent->metadata->package ?? '' );
-			$package_price = ringo_get_package_price( $package_name );
-
-			if ( $package_price <= 0 ) {
-				$stored = (float) get_post_meta( $post_id, '_ringo_amount', true );
-				if ( $stored > 0 ) {
-					$package_price = $stored;
-				}
-			}
+			// Record what Stripe actually charged (base + add-ons - coupon), not only the base
+			// package price, so receipts and reports match the real payment.
+			$package_price = ringo_stripe_charged_amount( $intent, $post_id, $package_name );
 
 			ringo_update_payment_activity( $post_id, 'payment_complete', 'stripe', [ 'source' => 'abandoned_cron' ] );
 			ringo_process_paid( $post_id, 'stripe', $pi_id, $package_name, $package_price );

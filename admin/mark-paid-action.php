@@ -43,7 +43,7 @@ function ringo_handle_mark_paid_row() {
 	}
 
 	$post = get_post( $post_id );
-	if ( ! $post || $post->post_type !== 'boats' ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		wp_die( 'Invalid post.' );
 	}
 

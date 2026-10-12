@@ -226,7 +226,7 @@ function ringo_send_admin_listing_email( $post_id, $package_name, $package_price
 
 	$headers = [
 		'Content-Type: text/html; charset=UTF-8',
-		'From: BassBoat4Sale <info@bassboat4sale.com>',
+		'From: BassBoat4Sale <ammar@ringomedia.com>',
 	];
 	if ( $reply_to ) {
 		$headers[] = 'Reply-To: ' . $reply_to;

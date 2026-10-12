@@ -61,7 +61,7 @@ function ringo_get_current_user_addon_order( $order_id ) {
  */
 function ringo_current_user_can_buy_boat_addons( $boat_id ) {
 	$boat = get_post( absint( $boat_id ) );
-	if ( ! $boat || 'boats' !== $boat->post_type ) {
+	if ( ! $boat || ! ringo_is_boat_post_type( $boat->post_type ) ) {
 		return false;
 	}
 	if ( current_user_can( 'manage_options' ) ) {
@@ -113,7 +113,7 @@ function ringo_complete_addon_order( $order_id, $provider, $transaction_id ) {
 
 	$boat_id = absint( get_post_meta( $order_id, '_ringo_addon_order_boat_id', true ) );
 	$boat    = $boat_id ? get_post( $boat_id ) : null;
-	if ( ! $boat || 'boats' !== $boat->post_type ) {
+	if ( ! $boat || ! ringo_is_boat_post_type( $boat->post_type ) ) {
 		return new WP_Error( 'invalid_boat', 'The boat linked to this order no longer exists.' );
 	}
 
@@ -740,7 +740,7 @@ function ringo_render_existing_boat_addon_shop( $addons, $compact = false ) {
 	}
 
 	$args = [
-		'post_type'      => 'boats',
+		'post_type'      => ringo_boat_post_types(),
 		'post_status'    => 'publish',
 		'posts_per_page' => 100,
 		'orderby'        => 'date',

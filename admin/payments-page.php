@@ -36,7 +36,7 @@ function ringo_render_payments_page() {
 		: [ [ 'key' => '_ringo_checkout_status', 'compare' => 'EXISTS' ] ];
 
 	$q = new WP_Query( [
-		'post_type'      => 'boats',
+		'post_type'      => ringo_boat_post_types(),
 		'post_status'    => [ 'draft', 'publish', 'pending', 'private', 'trash' ],
 		'posts_per_page' => $per_page,
 		'paged'          => $paged,

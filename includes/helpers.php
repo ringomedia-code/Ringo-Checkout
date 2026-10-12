@@ -25,7 +25,12 @@ if ( ! function_exists( 'ringo_log' ) ) {
 				? wp_json_encode( $data )
 				: (string) $data );
 		}
-		error_log( $line );
+		// Routine payment-event lines used to be written to php_errorlog on every
+		// event, which bloats that file. They are still kept in the DB log below;
+		// set RINGO_DEBUG (or use the filter) to also mirror them to error_log.
+		if ( ( defined( 'RINGO_DEBUG' ) && RINGO_DEBUG ) || apply_filters( 'ringo_log_to_error_log', false, $message ) ) {
+			error_log( $line );
+		}
 
 		// Persist to DB so the admin Email Logs page can display entries.
 		$entry = [
@@ -37,6 +42,140 @@ if ( ! function_exists( 'ringo_log' ) ) {
 		array_unshift( $logs, $entry );         // newest first
 		$logs = array_slice( $logs, 0, 200 );   // cap at 200 entries
 		update_option( 'ringo_email_logs', $logs, false );
+	}
+}
+
+// ─── Boat post types and dealer billing ──────────────────────────────────────
+
+/**
+ * Post types this plugin treats as a boat listing. Regular sellers create 'boats';
+ * Dealer / Dealer Plus accounts create 'dlr_boats'.
+ *
+ * @return string[]
+ */
+function ringo_boat_post_types() {
+	return (array) apply_filters( 'ringo_boat_post_types', [ 'boats', 'dlr_boats' ] );
+}
+
+/**
+ * @param string $post_type Post type slug.
+ * @return bool
+ */
+function ringo_is_boat_post_type( $post_type ) {
+	return in_array( (string) $post_type, ringo_boat_post_types(), true );
+}
+
+/**
+ * Package keys used for dealer accounts. They are paid for outside the site, so they
+ * have no listing price on the add-boat form.
+ *
+ * @return string[]
+ */
+function ringo_dealer_package_keys() {
+	return [ 'dealer_plus', 'dealer' ];
+}
+
+/**
+ * @param string $package_label Raw package label.
+ * @return bool
+ */
+function ringo_package_is_dealer( $package_label ) {
+	return in_array( strtolower( trim( (string) $package_label ) ), ringo_dealer_package_keys(), true );
+}
+
+/**
+ * Return 'dealer' or 'dealer_plus' for a Dealer / Dealer Plus account, otherwise ''.
+ * Administrators are never treated as dealers, even if they also hold a dealer role.
+ *
+ * @param int $user_id User ID (0 = current user).
+ * @return string
+ */
+function ringo_user_dealer_package( $user_id = 0 ) {
+	$user = $user_id ? get_userdata( (int) $user_id ) : wp_get_current_user();
+	if ( ! $user || ! $user->exists() ) {
+		return '';
+	}
+	$roles = (array) $user->roles;
+	if ( in_array( 'administrator', $roles, true ) ) {
+		return '';
+	}
+	foreach ( ringo_dealer_package_keys() as $key ) {
+		if ( in_array( $key, $roles, true ) ) {
+			return $key;
+		}
+	}
+	return '';
+}
+
+/**
+ * True when the listing's base package price is waived because the boat's author really
+ * is a Dealer / Dealer Plus account. The package name comes from the browser, so it is
+ * only honoured when the author's own role matches it.
+ *
+ * @param string $package_label Package label sent by the browser.
+ * @param int    $post_id       Boat ID (0 = current user is the author).
+ * @return bool
+ */
+function ringo_checkout_base_waived( $package_label, $post_id = 0 ) {
+	if ( ! ringo_package_is_dealer( $package_label ) ) {
+		return false;
+	}
+	$owner = $post_id ? (int) get_post_field( 'post_author', (int) $post_id ) : get_current_user_id();
+	return ringo_user_dealer_package( $owner ) === strtolower( trim( (string) $package_label ) );
+}
+
+// ─── Access / payability guards (security) ───────────────────────────────────
+
+/**
+ * Publish a dealer listing that has nothing to pay (base waived, no paid add-ons) from a
+ * payment endpoint, so an empty total completes instead of erroring. Returns the thank-you
+ * URL, or '' when this listing is not eligible.
+ *
+ * @param int    $post_id       Boat ID.
+ * @param string $package_label Package label sent by the browser.
+ * @return string
+ */
+function ringo_checkout_publish_waived_free( $post_id, $package_label ) {
+	if ( ! ringo_checkout_base_waived( $package_label, $post_id ) ) {
+		return '';
+	}
+	if ( ! ringo_process_paid( $post_id, 'dealer', 'dealer-' . (int) $post_id, $package_label, 0 ) ) {
+		return '';
+	}
+	update_post_meta( $post_id, '_ringo_amount', 0 );
+	return home_url( '/thank-you/?provider=dealer&boat_post_id=' . (int) $post_id );
+}
+
+if ( ! function_exists( 'ringo_current_user_owns_boat' ) ) {
+	/**
+	 * True when the current (logged-in) user is the boat's author or an administrator.
+	 * Used to stop anyone holding a public page nonce from acting on other people's listings.
+	 *
+	 * @param int $post_id Boat post ID.
+	 * @return bool
+	 */
+	function ringo_current_user_owns_boat( $post_id ) {
+		$post = get_post( (int) $post_id );
+		if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) || ! is_user_logged_in() ) {
+			return false;
+		}
+		return current_user_can( 'administrator' ) || (int) $post->post_author === get_current_user_id();
+	}
+}
+
+if ( ! function_exists( 'ringo_boat_is_open_for_payment' ) ) {
+	/**
+	 * True for an existing boat draft that has not been paid yet.
+	 *
+	 * @param int $post_id Boat post ID.
+	 * @return bool
+	 */
+	function ringo_boat_is_open_for_payment( $post_id ) {
+		$post = get_post( (int) $post_id );
+		if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) || 'draft' !== $post->post_status ) {
+			return false;
+		}
+		return 'paid' !== get_post_meta( $post->ID, '_ringo_checkout_status', true );
 	}
 }
 

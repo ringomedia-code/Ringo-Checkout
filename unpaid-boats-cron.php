@@ -40,7 +40,7 @@ function ringo_check_unpaid_boats_handler() {
 
 	// Find all unpaid boats
 	$args = [
-		'post_type'  => 'boats',
+		'post_type'  => ringo_boat_post_types(),
 		'posts_per_page' => -1,
 		'post_status' => 'draft',
 		'meta_query' => [
@@ -72,7 +72,9 @@ function ringo_check_unpaid_boats_handler() {
 			update_post_meta( $post_id, '_ringo_unpaid_time', $unpaid_time );
 		}
 
-		$current_time = current_time( 'timestamp' );
+		// _ringo_unpaid_time is stored with time() (UTC), so compare against time(), not the
+		// site-local current_time('timestamp'), which skews the delay by the timezone offset.
+		$current_time = time();
 		$time_elapsed = $current_time - $unpaid_time;
 
 		// Check if timeout has passed
@@ -88,11 +90,19 @@ function ringo_check_unpaid_boats_handler() {
 			continue;
 		}
 
+		// Someone is still actively paying: do not send "payment not completed" mid-checkout.
+		$last_activity = (int) get_post_meta( $post_id, '_ringo_payment_last_activity', true );
+		if ( $last_activity && ( time() - $last_activity ) < max( $unpaid_timeout, 600 ) ) {
+			continue;
+		}
+
 		// Send email to customer
 		ringo_send_unpaid_boat_customer_email( $post_id );
 
-		// Send email to admin
-		ringo_send_unpaid_boat_admin_email( $post_id );
+		// Send email to admin (once per boat, even if the customer email could not be sent)
+		if ( ! get_post_meta( $post_id, '_ringo_unpaid_admin_email_sent', true ) ) {
+			ringo_send_unpaid_boat_admin_email( $post_id );
+		}
 	}
 
 	wp_reset_postdata();
@@ -178,7 +188,7 @@ function ringo_send_unpaid_boat_customer_email( $post_id ) {
 		$to,
 		$subject,
 		$html,
-		[ 'Reply-To: info@bassboat4sale.com' ],
+		[ 'Reply-To: ammar@ringomedia.com' ],
 		$post_id
 	);
 

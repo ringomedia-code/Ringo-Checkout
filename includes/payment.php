@@ -86,6 +86,49 @@ function ringo_finalize_paid_boat_after_assets( $post_id ) {
 add_action( 'ringo_finalize_paid_boat_after_assets', 'ringo_finalize_paid_boat_after_assets' );
 
 /**
+ * Amount actually charged on a Stripe PaymentIntent, in dollars.
+ *
+ * Falls back to the amount stored when the intent was created, then to the base
+ * package price, so an unexpected response never records $0.
+ *
+ * @param object $intent       Stripe PaymentIntent.
+ * @param int    $post_id      Boat post ID.
+ * @param string $package_name Package label.
+ * @return float
+ */
+function ringo_stripe_charged_amount( $intent, $post_id, $package_name = '' ) {
+	$cents = (int) ( $intent->amount_received ?? 0 );
+	if ( $cents <= 0 ) {
+		$cents = (int) ( $intent->amount ?? 0 );
+	}
+	if ( $cents > 0 ) {
+		return round( $cents / 100, 2 );
+	}
+	$stored = (float) get_post_meta( $post_id, '_ringo_amount', true );
+	if ( $stored > 0 ) {
+		return $stored;
+	}
+	return (float) ringo_get_package_price( $package_name );
+}
+
+/**
+ * Restore the add-ons a PayPal order was priced for before the boat is marked paid.
+ *
+ * Add-on meta can be rewritten after an order is created; the snapshot taken at order
+ * creation is what was actually charged. No-op when there is no matching snapshot.
+ *
+ * @param int    $post_id  Boat ID.
+ * @param string $order_id PayPal order ID being paid.
+ */
+function ringo_restore_paypal_paid_cart( $post_id, $order_id ) {
+	$cart = json_decode( (string) get_post_meta( $post_id, '_ringo_paypal_order_cart', true ), true );
+	if ( ! is_array( $cart ) || ( $cart['order'] ?? '' ) !== (string) $order_id ) {
+		return;
+	}
+	ringo_save_boat_addons( $post_id, (array) ( $cart['addon_ids'] ?? [] ), (float) ( $cart['base'] ?? 0 ) );
+}
+
+/**
  * Mark a boat post as paid, publish it, and dispatch notification emails.
  *
  * This function is idempotent with respect to publishing: if the post is
@@ -101,9 +144,31 @@ add_action( 'ringo_finalize_paid_boat_after_assets', 'ringo_finalize_paid_boat_a
 function ringo_process_paid( $post_id, $provider, $provider_id, $package_name, $package_price ) {
 	$post = get_post( $post_id );
 
-	if ( ! $post || $post->post_type !== 'boats' ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		ringo_log( 'ringo_process_paid: invalid post', [ 'post_id' => $post_id ] );
 		return false;
+	}
+
+	// SECURITY: one gateway payment may only ever pay for one boat. Without this, a
+	// single paid Stripe PaymentIntent / PayPal order could be replayed against any
+	// number of other draft boats via the thank-you URL.
+	if ( in_array( $provider, [ 'stripe', 'paypal' ], true ) && '' !== (string) $provider_id ) {
+		global $wpdb;
+		$pay_key = ( 'stripe' === $provider ) ? '_ringo_stripe_payment_intent' : '_ringo_paypal_order_id';
+		$other   = (int) $wpdb->get_var( $wpdb->prepare(
+			"SELECT pm.post_id FROM {$wpdb->postmeta} pm
+			 WHERE pm.meta_key = %s AND pm.meta_value = %s AND pm.post_id <> %d
+			 AND EXISTS ( SELECT 1 FROM {$wpdb->postmeta} s WHERE s.post_id = pm.post_id AND s.meta_key = '_ringo_checkout_status' AND s.meta_value = 'paid' )
+			 LIMIT 1",
+			$pay_key,
+			(string) $provider_id,
+			(int) $post_id
+		) );
+		if ( $other ) {
+			ringo_log( 'ringo_process_paid: REFUSED - payment already used for another boat', [ 'post_id' => (int) $post_id, 'provider' => $provider, 'provider_id' => $provider_id, 'used_by' => $other ] );
+			ringo_record_draft_failure( $post_id, 'payment_incomplete', 'This payment was already used for another listing.', [ 'source' => 'process_paid_duplicate_payment', 'used_by' => $other ] );
+			return false;
+		}
 	}
 
 	$asset_status  = (string) get_post_meta( $post_id, '_ringo_native_assets_status', true );
@@ -149,6 +214,13 @@ function ringo_process_paid( $post_id, $provider, $provider_id, $package_name, $
 		delete_post_meta( $post_id, '_ringo_draft_failure_time' );
 	}
 
+	// A successful payment supersedes any earlier declined attempt: drop the stale error
+	// and point the last-intent marker at the payment that actually succeeded.
+	delete_post_meta( $post_id, '_ringo_payment_error' );
+	if ( $provider === 'stripe' && '' !== (string) $provider_id ) {
+		update_post_meta( $post_id, '_ringo_payment_intent_id', sanitize_text_field( $provider_id ) );
+	}
+
 	if ( $provider === 'stripe' ) {
 		update_post_meta( $post_id, '_ringo_stripe_payment_intent', sanitize_text_field( $provider_id ) );
 	} elseif ( $provider === 'paypal' ) {
@@ -160,6 +232,14 @@ function ringo_process_paid( $post_id, $provider, $provider_id, $package_name, $
 	}
 	if ( (float) $package_price > 0 ) {
 		update_post_meta( $post_id, '_ringo_amount', (float) $package_price );
+	}
+
+	// Count the coupon use once, when the boat is actually paid (not when an
+	// intent/order is merely created, which let abandoned checkouts use up coupons).
+	$coupon_code = (string) get_post_meta( $post_id, '_ringo_coupon_code', true );
+	if ( $coupon_code && ! get_post_meta( $post_id, '_ringo_coupon_counted', true ) ) {
+		ringo_increment_coupon_use( $coupon_code, (string) ringo_get_form_email( $post_id ) );
+		update_post_meta( $post_id, '_ringo_coupon_counted', 1 );
 	}
 
 	if ( $defer_publish ) {

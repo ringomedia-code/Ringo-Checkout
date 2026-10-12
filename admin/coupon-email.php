@@ -137,7 +137,7 @@ function ringo_ajax_send_coupon_emails() {
 	$failed_count = 0;
 	$headers      = [
 		'Content-Type: text/html; charset=UTF-8',
-		'From: Bassboat4sale <info@bassboat4sale.com>',
+		'From: Bassboat4sale <ammar@ringomedia.com>',
 	];
 
 	foreach ( $send_to as $email ) {

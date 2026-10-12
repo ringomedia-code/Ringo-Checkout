@@ -5,8 +5,8 @@
  *               add-on-only orders for published boats, payment emails, follow-ups, and failure tracking.
  * Version:      9.4.7
  * Requires PHP: 7.4
- * Author:       Ringomedia
- * Author URI:   https://github.com/ammar458/Ringo-Checkout
+ * Author:       Ringo Media
+ * Author URI:   https://ringomedia.com/
  * License:      GPL-2.0-or-later
  * Text Domain:  ringo-checkout
  * Update URI:   https://github.com/ammar458/Ringo-Checkout
@@ -75,6 +75,7 @@ function ringo_activate() {
 }
 
 function ringo_deactivate() {
+	wp_clear_scheduled_hook( 'ringo_check_unpaid_boats' );
 	$ts = wp_next_scheduled( 'ringo_check_abandoned_checkouts' );
 	if ( $ts ) {
 		wp_unschedule_event( $ts, 'ringo_check_abandoned_checkouts' );

@@ -50,7 +50,7 @@ function ringo_find_boat_by_payment_meta( $meta_key, $value ) {
 	}
 
 	$found = new WP_Query( [
-		'post_type'      => 'boats',
+		'post_type'      => ringo_boat_post_types(),
 		'post_status'    => [ 'draft', 'publish', 'pending', 'private' ],
 		'posts_per_page' => 1,
 		'fields'         => 'ids',
@@ -120,6 +120,21 @@ function ringo_thank_you_stripe() {
 			$post_id = isset( $intent->metadata->post_id ) ? (int) $intent->metadata->post_id : 0;
 		}
 
+		// SECURITY: this PaymentIntent must belong to the boat named in the URL. The
+		// URL is attacker-controlled, so without this a single paid intent could be
+		// replayed against any number of other draft boats.
+		if ( $post_id ) {
+			$stored_pi = (string) get_post_meta( $post_id, '_ringo_stripe_payment_intent', true );
+			$meta_post = isset( $intent->metadata->post_id ) ? (int) $intent->metadata->post_id : 0;
+			// The intent's own metadata is written server-side, so it is the authority. The
+			// stored id is only a fallback: a newer intent (second tab, retry) overwrites it
+			// while an earlier intent can still succeed and must not be orphaned.
+			if ( $meta_post ? ( $meta_post !== (int) $post_id ) : ( $stored_pi && $stored_pi !== $pi_id ) ) {
+				ringo_log( 'Stripe thank-you: REFUSED - PaymentIntent does not belong to this boat', [ 'post_id' => $post_id, 'pi' => $pi_id, 'stored_pi' => $stored_pi, 'intent_post' => $meta_post ] );
+				return;
+			}
+		}
+
 		if ( 'succeeded' !== $status ) {
 			ringo_log( 'Stripe thank-you: not succeeded', [
 				'pi'      => $pi_id,
@@ -156,13 +171,15 @@ function ringo_thank_you_stripe() {
 		}
 
 		$package_name  = (string) ( $intent->metadata->package ?? '' );
-		$package_price = ringo_get_package_price( $package_name );
+		// Record what Stripe actually charged (base + add-ons - coupon), not only the base
+		// package price, so receipts and reports match the real payment.
+		$package_price = ringo_stripe_charged_amount( $intent, $post_id, $package_name );
 
-		if ( $package_price <= 0 ) {
-			$stored = (float) get_post_meta( $post_id, '_ringo_amount', true );
-			if ( $stored > 0 ) {
-				$package_price = $stored;
-			}
+		// Re-apply the add-ons that were actually charged (server-written intent metadata) so
+		// add-on meta edited after the intent was created cannot grant unpaid features.
+		if ( isset( $intent->metadata->base_amount ) ) {
+			$paid_addon_ids = array_values( array_filter( array_map( 'trim', explode( ',', (string) ( $intent->metadata->addon_ids ?? '' ) ) ) ) );
+			ringo_save_boat_addons( $post_id, $paid_addon_ids, (float) $intent->metadata->base_amount );
 		}
 
 		ringo_process_paid( $post_id, 'stripe', $pi_id, $package_name, $package_price );
@@ -224,6 +241,13 @@ function ringo_thank_you_paypal() {
 
 	if ( ! $boat_post_id ) {
 		ringo_log( 'PayPal thank-you: could not resolve boat_post_id', [ 'order_id' => $order_id ] );
+		return;
+	}
+
+	// SECURITY: the order in the URL must be the one created for this boat.
+	$stored_order = (string) get_post_meta( $boat_post_id, '_ringo_paypal_order_id', true );
+	if ( $stored_order !== $order_id ) {
+		ringo_log( 'PayPal thank-you: REFUSED - order does not belong to this boat', [ 'post_id' => $boat_post_id, 'order_id' => $order_id, 'stored_order' => $stored_order ] );
 		return;
 	}
 
@@ -392,6 +416,7 @@ function ringo_paypal_finish_paid( $boat_post_id, $order_id ) {
 		$package_price = ringo_get_package_price( $package_name );
 	}
 
+	ringo_restore_paypal_paid_cart( $boat_post_id, $order_id );
 	ringo_process_paid( $boat_post_id, 'paypal', $order_id, $package_name, $package_price );
 }
 
@@ -417,7 +442,7 @@ function ringo_thank_you_admin() {
 	}
 
 	$post = get_post( $post_id );
-	if ( ! $post || $post->post_type !== 'boats' ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		ringo_log( 'Admin thank-you: invalid post', [ 'post_id' => $post_id ] );
 		return;
 	}

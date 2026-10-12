@@ -76,7 +76,15 @@ function ringo_apply_coupon( $code, $price, $email = '' ) {
 		return new WP_Error( 'expired', 'This coupon has reached its usage limit.' );
 	}
 
-	// Check per-user usage limit.
+	// Check per-user usage limit. SECURITY: the limit used to be skipped whenever the
+	// request left the email blank. Fall back to the signed-in user's email, and if
+	// we still cannot tell who is redeeming, refuse rather than skip the check.
+	if ( ! empty( $c['max_uses_per_user'] ) && ! $email && is_user_logged_in() ) {
+		$email = (string) wp_get_current_user()->user_email;
+	}
+	if ( ! empty( $c['max_uses_per_user'] ) && ! $email ) {
+		return new WP_Error( 'email_required', 'Please enter your email address to use this coupon.' );
+	}
 	if ( ! empty( $c['max_uses_per_user'] ) && $email ) {
 		$email_key  = strtolower( $email );
 		$user_uses  = isset( $c['user_uses'][ $email_key ] ) ? (int) $c['user_uses'][ $email_key ] : 0;

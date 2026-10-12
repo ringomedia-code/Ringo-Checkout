@@ -35,13 +35,21 @@ function ringo_ajax_mark_post_unpaid() {
 	}
 
 	$post = get_post( $boat_post_id );
-	if ( ! $post || $post->post_type !== 'boats' ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		wp_send_json_error( [ 'message' => 'Boat post not found' ] );
+	}
+	// SECURITY: the nonce is printed on a public page, so it proves nothing about the
+	// caller. Only the listing's owner (or an admin) may touch it, and never once paid.
+	if ( ! ringo_current_user_owns_boat( $boat_post_id ) ) {
+		wp_send_json_error( [ 'message' => 'You do not have permission to update this listing.' ], 403 );
+	}
+	if ( ! ringo_boat_is_open_for_payment( $boat_post_id ) ) {
+		wp_send_json_error( [ 'message' => 'This listing is already paid or no longer a draft.' ], 409 );
 	}
 
 	$fallback_base = $base_price_client > 0 ? $base_price_client : $package_price;
 	$totals        = ringo_get_checkout_totals( $package_name, $addon_ids, $fallback_base );
-	if ( $totals['base'] <= 0 || $totals['subtotal'] <= 0 ) {
+	if ( ( $totals['base'] <= 0 && ! ringo_checkout_base_waived( $package_name, $boat_post_id ) ) || $totals['subtotal'] <= 0 ) {
 		wp_send_json_error( [ 'message' => 'Invalid checkout total' ] );
 	}
 	$package_price = (float) $totals['subtotal'];
@@ -105,11 +113,25 @@ function ringo_ajax_mark_payment_failed() {
 	}
 
 	$post = get_post( $boat_post_id );
-	if ( ! $post || $post->post_type !== 'boats' ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		wp_send_json_error( [ 'message' => 'Boat post not found' ] );
+	}
+	// SECURITY: the nonce is printed on a public page, so it proves nothing about the
+	// caller. Only the listing's owner (or an admin) may touch it, and never once paid.
+	if ( ! ringo_current_user_owns_boat( $boat_post_id ) ) {
+		wp_send_json_error( [ 'message' => 'You do not have permission to update this listing.' ], 403 );
+	}
+	if ( ! ringo_boat_is_open_for_payment( $boat_post_id ) ) {
+		wp_send_json_error( [ 'message' => 'This listing is already paid or no longer a draft.' ], 409 );
 	}
 
 	// Update status to payment_failed
+	// The failure report must refer to this boat's own PaymentIntent.
+	$stored_pi = (string) get_post_meta( $boat_post_id, '_ringo_stripe_payment_intent', true );
+	if ( $stored_pi && $stored_pi !== $payment_intent_id ) {
+		wp_send_json_error( [ 'message' => 'Payment does not belong to this listing.' ], 403 );
+	}
+
 	update_post_meta( $boat_post_id, '_ringo_checkout_status', 'payment_failed' );
 	update_post_meta( $boat_post_id, '_ringo_payment_error', $error_message );
 	update_post_meta( $boat_post_id, '_ringo_payment_failed_time', current_time( 'timestamp' ) );
@@ -162,12 +184,25 @@ function ringo_ajax_process_uploaded_images() {
 	}
 
 	$post = get_post( $boat_post_id );
-	if ( ! $post || $post->post_type !== 'boats' ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		wp_send_json_error( [ 'message' => 'Boat post not found' ] );
+	}
+	// SECURITY: the nonce is printed on a public page, so it proves nothing about the
+	// caller. Only the listing's owner (or an admin) may touch it, and never once paid.
+	if ( ! ringo_current_user_owns_boat( $boat_post_id ) ) {
+		wp_send_json_error( [ 'message' => 'You do not have permission to update this listing.' ], 403 );
+	}
+	if ( ! ringo_boat_is_open_for_payment( $boat_post_id ) ) {
+		wp_send_json_error( [ 'message' => 'This listing is already paid or no longer a draft.' ], 409 );
 	}
 
 	// Parse file IDs
-	$file_ids = array_filter( array_map( 'intval', explode( ',', $file_ids_str ) ) );
+	// Only accept real image attachments that belong to this boat or to the caller.
+	$file_ids = array_values( array_filter( array_map( 'intval', explode( ',', $file_ids_str ) ), static function ( $fid ) use ( $boat_post_id ) {
+		$att = get_post( $fid );
+		return $att && 'attachment' === $att->post_type
+			&& ( (int) $att->post_parent === (int) $boat_post_id || (int) $att->post_author === get_current_user_id() || current_user_can( 'administrator' ) );
+	} ) );
 
 	if ( ! empty( $file_ids ) ) {
 		// Store uploaded file IDs
@@ -219,6 +254,14 @@ function ringo_ajax_payment_activity() {
 		wp_send_json_error( [ 'message' => 'Invalid activity update' ] );
 	}
 
+	// SECURITY: owner only, and not for boats that are already paid.
+	if ( ! ringo_current_user_owns_boat( $post_id ) ) {
+		wp_send_json_error( [ 'message' => 'You do not have permission to update this listing.' ], 403 );
+	}
+	if ( ! ringo_boat_is_open_for_payment( $post_id ) ) {
+		wp_send_json_error( [ 'message' => 'This listing is already paid or no longer a draft.' ], 409 );
+	}
+
 	if ( ! ringo_update_payment_activity( $post_id, $state, $provider, [ 'source' => 'browser_activity' ] ) ) {
 		wp_send_json_error( [ 'message' => 'Boat post not found' ] );
 	}
@@ -266,7 +309,15 @@ function ringo_ajax_report_payment_failure() {
 		wp_send_json_error( [ 'message' => 'Invalid failure report' ] );
 	}
 
-	if ( $provider ) {
+	// SECURITY: owner only, and not for boats that are already paid.
+	if ( ! ringo_current_user_owns_boat( $post_id ) ) {
+		wp_send_json_error( [ 'message' => 'You do not have permission to update this listing.' ], 403 );
+	}
+	if ( ! ringo_boat_is_open_for_payment( $post_id ) ) {
+		wp_send_json_error( [ 'message' => 'This listing is already paid or no longer a draft.' ], 409 );
+	}
+
+	if ( $provider && in_array( $provider, [ 'stripe', 'paypal', 'coupon' ], true ) ) {
 		update_post_meta( $post_id, '_ringo_payment_provider', $provider );
 	}
 

@@ -406,7 +406,11 @@ function ringo_get_addon_form_effects( $requested_ids ) {
  */
 function ringo_get_checkout_totals( $package_label, $addon_ids = [], $fallback_base = 0.0 ) {
 	$base = ringo_get_package_price( $package_label );
-	if ( $base <= 0 && $fallback_base > 0 ) {
+	// SECURITY: the price must come from the plugin settings. A browser-supplied
+	// "fallback" price used to be honoured for any unknown package name, which let a
+	// buyer publish a listing for any amount. Legacy sites that rely on client-sent
+	// prices can opt back in with: add_filter( 'ringo_allow_client_price_fallback', '__return_true' );
+	if ( $base <= 0 && $fallback_base > 0 && apply_filters( 'ringo_allow_client_price_fallback', false, $package_label ) ) {
 		$base = (float) $fallback_base;
 	}
 	$addons = ringo_calculate_addons( $addon_ids );

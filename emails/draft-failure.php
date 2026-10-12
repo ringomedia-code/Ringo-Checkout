@@ -129,7 +129,7 @@ function ringo_update_payment_activity( $post_id, $state, $provider = '', $conte
 	$post_id = (int) $post_id;
 	$post    = get_post( $post_id );
 
-	if ( ! $post || 'boats' !== $post->post_type ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		return false;
 	}
 
@@ -303,7 +303,7 @@ function ringo_send_draft_failure_notification_email( $post_id, $condition, $mes
 			$to,
 			$subject,
 			$html,
-			[ 'Reply-To: info@bassboat4sale.com' ],
+			[ 'Reply-To: ammar@ringomedia.com' ],
 			$post_id
 		);
 
@@ -334,7 +334,7 @@ function ringo_record_draft_failure( $post_id, $condition, $message = '', $conte
 	$message   = sanitize_text_field( (string) $message );
 	$post      = get_post( $post_id );
 
-	if ( ! $post || 'boats' !== $post->post_type ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		ringo_log( 'Draft failure ignored: invalid boat', [ 'post_id' => $post_id, 'condition' => $condition ] );
 		return false;
 	}

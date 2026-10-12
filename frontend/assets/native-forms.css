@@ -27,6 +27,11 @@
   font-family: inherit;
 }
 
+/* Edit form: tighter top margin than the new-listing form */
+.ringo-native-form-shell.ringo-native-edit-shell {
+  margin: 15px auto 54px;
+}
+
 .ringo-native-form-intro {
   display: flex;
   align-items: flex-end;
@@ -1075,6 +1080,15 @@
   font-weight: 800;
   text-decoration: underline;
   cursor: pointer;
+}
+
+.ringo-native-selected-options button:hover,
+.ringo-native-selected-options button:focus,
+.ringo-native-selected-options button:active {
+  background: transparent;
+  color: #0876b9;
+  box-shadow: none;
+  outline: 0;
 }
 
 .ringo-addon-service-effect {

@@ -44,11 +44,19 @@ function ringo_ajax_paypal_create_order() {
 	}
 
 	$post = get_post( $boat_post_id );
-	if ( ! $post || $post->post_type !== 'boats' ) {
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
 		wp_send_json_error( [ 'message' => 'Boat not found' ] );
 	}
 	if ( $post->post_status !== 'draft' ) {
 		wp_send_json_error( [ 'message' => 'Boat must be in draft before payment (current: ' . $post->post_status . ')' ] );
+	}
+	// SECURITY: only the listing's owner (or an admin) may start a payment for it, and
+	// never for a listing that is already paid. The nonce on its own is public.
+	if ( ! ringo_current_user_owns_boat( $boat_post_id ) ) {
+		wp_send_json_error( [ 'message' => 'You do not have permission to pay for this listing.', 'condition' => 'payment_setup_error' ], 403 );
+	}
+	if ( ! ringo_boat_is_open_for_payment( $boat_post_id ) ) {
+		wp_send_json_error( [ 'message' => 'This listing is already paid.' ], 409 );
 	}
 
 	if ( $user_email && is_email( $user_email ) ) {
@@ -60,7 +68,12 @@ function ringo_ajax_paypal_create_order() {
 	$fallback_base = $base_price_client > 0 ? $base_price_client : $package_price_client;
 	$totals        = ringo_get_checkout_totals( $package_label, $addon_ids, $fallback_base );
 	$amount        = (float) $totals['subtotal'];
-	if ( $totals['base'] <= 0 || $amount <= 0 ) {
+	// Dealer accounts pay for their listing outside the site: only add-ons are charged.
+	// Dealer with nothing to pay (no paid add-ons): publish instead of erroring.
+	if ( $amount <= 0 && '' !== ( $ringo_free_url = ringo_checkout_publish_waived_free( $boat_post_id, $package_label ) ) ) {
+		wp_send_json_success( [ 'free_checkout' => true, 'redirect' => $ringo_free_url ] );
+	}
+	if ( ( $totals['base'] <= 0 && ! ringo_checkout_base_waived( $package_label, $boat_post_id ) ) || $amount <= 0 ) {
 		ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'PayPal checkout total was invalid.', [ 'source' => 'paypal_create_order', 'package' => $package_label ] );
 		wp_send_json_error( [ 'message' => 'Invalid checkout total', 'condition' => 'payment_setup_error' ] );
 	}
@@ -71,9 +84,31 @@ function ringo_ajax_paypal_create_order() {
 	$coupon_code = isset( $_POST['coupon_code'] ) ? strtoupper( sanitize_text_field( trim( (string) wp_unslash( $_POST['coupon_code'] ) ) ) ) : '';
 	if ( $coupon_code ) {
 		$coupon_result = ringo_apply_coupon( $coupon_code, $amount, $user_email );
-		if ( ! is_wp_error( $coupon_result ) ) {
-			$amount = $coupon_result['final_price'];
+		if ( is_wp_error( $coupon_result ) ) {
+			// Tell the buyer instead of silently charging the full price.
+			wp_send_json_error( [ 'message' => $coupon_result->get_error_message(), 'condition' => 'payment_setup_error' ] );
 		}
+		$amount = $coupon_result['final_price'];
+		update_post_meta( $boat_post_id, '_ringo_coupon_code', sanitize_text_field( $coupon_code ) );
+	} else {
+		delete_post_meta( $boat_post_id, '_ringo_coupon_code' ); // no stale coupon from an earlier attempt
+	}
+
+	// 100%-off coupon: nothing to charge, so skip PayPal and mark the listing paid.
+	if ( $amount <= 0 ) {
+		ringo_set_payment_meta( $boat_post_id, 'coupon', 'unpaid', $package_label, 0, '', '', $form_id );
+		update_post_meta( $boat_post_id, '_ringo_checkout_created_at', time() );
+		if ( ringo_process_paid( $boat_post_id, 'coupon', 'coupon-' . $boat_post_id . '-' . $coupon_code, $package_label, 0 ) ) {
+			update_post_meta( $boat_post_id, '_ringo_amount', 0 ); // record that nothing was charged
+			wp_send_json_success( [
+				'free_checkout' => true,
+				'redirect'      => home_url( '/thank-you/?provider=coupon&boat_post_id=' . $boat_post_id ),
+			] );
+		}
+		wp_send_json_error( [ 'message' => 'Could not complete the free listing. Please contact support.', 'condition' => 'payment_setup_error' ] );
+	}
+	if ( $amount < 0.01 ) {
+		wp_send_json_error( [ 'message' => 'The total after your coupon is too small to charge. Please contact support to finish this listing.', 'condition' => 'payment_setup_error' ] );
 	}
 
 	ringo_update_payment_activity( $boat_post_id, 'paypal_order_request', 'paypal', [ 'source' => 'server' ] );
@@ -148,10 +183,12 @@ function ringo_ajax_paypal_create_order() {
 
 	update_post_meta( $boat_post_id, '_ringo_checkout_created_at', time() );
 
-	if ( $coupon_code ) {
-		update_post_meta( $boat_post_id, '_ringo_coupon_code', sanitize_text_field( $coupon_code ) );
-		ringo_increment_coupon_use( $coupon_code, $user_email );
-	}
+	// Snapshot the cart this order was priced for, so capture can restore exactly what was paid.
+	update_post_meta( $boat_post_id, '_ringo_paypal_order_cart', wp_json_encode( [
+		'order'     => $order_id,
+		'addon_ids' => array_values( $totals['addon_ids'] ),
+		'base'      => (float) $totals['base'],
+	] ) );
 
 	ringo_set_payment_meta(
 		$boat_post_id,
@@ -200,11 +237,23 @@ function ringo_ajax_paypal_capture_order() {
 		wp_send_json_error( [ 'message' => 'Missing boat post ID' ] );
 	}
 
+	// SECURITY: only the listing's owner (or an admin) may capture a payment for it.
+	if ( ! ringo_current_user_owns_boat( $boat_post_id ) ) {
+		wp_send_json_error( [ 'message' => 'You do not have permission to pay for this listing.', 'condition' => 'payment_setup_error' ], 403 );
+	}
+
 	// Guard against double-capture if the user somehow triggers this twice.
 	if ( get_post_meta( $boat_post_id, '_ringo_checkout_status', true ) === 'paid' ) {
 		wp_send_json_success( [
 			'redirect' => home_url( '/thank-you/?provider=paypal&boat_post_id=' . $boat_post_id ),
 		] );
+	}
+
+	// SECURITY: the order being captured must be the one created for THIS boat, so a
+	// paid order from another listing cannot be replayed here.
+	if ( (string) get_post_meta( $boat_post_id, '_ringo_paypal_order_id', true ) !== $order_id ) {
+		ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'PayPal order does not belong to this listing.', [ 'source' => 'paypal_capture_order_mismatch', 'order_id' => $order_id ] );
+		wp_send_json_error( [ 'message' => 'This PayPal order does not belong to this listing.', 'condition' => 'payment_setup_error' ], 403 );
 	}
 
 	ringo_update_payment_activity( $boat_post_id, 'paypal_capturing', 'paypal', [ 'order_id' => $order_id, 'source' => 'server' ] );
@@ -271,7 +320,14 @@ function ringo_ajax_paypal_capture_order() {
 	}
 
 	ringo_update_payment_activity( $boat_post_id, 'payment_complete', 'paypal', [ 'order_id' => $order_id ] );
-	ringo_process_paid( $boat_post_id, 'paypal', $order_id, $package_name, $package_price );
+	ringo_restore_paypal_paid_cart( $boat_post_id, $order_id );
+	if ( ! ringo_process_paid( $boat_post_id, 'paypal', $order_id, $package_name, $package_price ) ) {
+		// Money was captured but the listing could not be completed: never report success.
+		wp_send_json_error( [
+			'message'   => 'Your PayPal payment was received, but we could not finish publishing the listing. Please contact support and do not pay again.',
+			'condition' => 'payment_incomplete',
+		] );
+	}
 
 	wp_send_json_success( [
 		'redirect' => home_url( '/thank-you/?provider=paypal&boat_post_id=' . $boat_post_id ),

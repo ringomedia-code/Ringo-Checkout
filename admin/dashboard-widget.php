@@ -46,7 +46,7 @@ function ringo_register_dashboard_widgets() {
  */
 function ringo_render_paid_boats_widget() {
 	$args = [
-		'post_type'      => 'boats',
+		'post_type'      => ringo_boat_post_types(),
 		'post_status'    => [ 'draft', 'publish', 'pending', 'private' ],
 		'posts_per_page' => 10,
 		'meta_query'     => [
@@ -132,7 +132,7 @@ function ringo_render_paid_boats_widget() {
  */
 function ringo_render_action_required_widget() {
 	$args = [
-		'post_type'      => 'boats',
+		'post_type'      => ringo_boat_post_types(),
 		'post_status'    => [ 'draft', 'publish', 'pending', 'private' ],
 		'posts_per_page' => 10,
 		'meta_query'     => [
