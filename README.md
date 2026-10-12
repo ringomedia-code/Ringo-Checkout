@@ -26,6 +26,7 @@ A WordPress plugin for [BassBoat4Sale.com](https://bassboat4sale.com) that handl
 - [Developer reference](#developer-reference)
 - [Updates](#updates)
 - [Project layout](#project-layout)
+- [Changelog](#changelog)
 - [More documentation](#more-documentation)
 
 ## What it does
@@ -223,6 +224,56 @@ cron/                              abandoned-checkout checker
 vendor/                            Stripe SDK and Plugin Update Checker (bundled)
 ```
 
+## Changelog
+
+Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
+
+### Unreleased
+
+Code on the production site and staging, synced into this repository on 2026-10-12 while the version number was left at 9.4.7. It differs from the `v9.4.7` tag in 24 files, mainly the native forms (`frontend/native-forms.php`), the Stripe and PayPal AJAX handlers, checkout helpers and payment logic, the add-on code, the customer, admin and abandoned emails, the abandoned-checkout cron and the unpaid-boat cron. Some admin and email files have small changes. These changes will get their own version number, with proper notes, when they are released.
+
+### 9.4.7 (2026-08-15)
+
+- Add a helper note to the motor hours field on the native forms.
+
+### 9.4.6 (2026-08-15)
+
+- Add tooltips for dealer-only fields on the native forms.
+
+### 9.4.5 (2026-08-15)
+
+- Remove the `boatid` prefix from uploaded image filenames.
+
+### 9.4.4 (2026-08-15)
+
+- Restrict boat image uploads to JPG, PNG and WebP (other types are treated as JPG), and rename uploaded cover and gallery images from the boat ID. Gallery numbering continues after the images already kept when a boat is edited.
+
+### 9.4.3 (2026-08-13)
+
+- Force the native form top margin with `!important` so the theme cannot override it.
+
+### 9.4.2 (2026-08-13)
+
+- Increase the top margin of the native form container.
+
+### 9.4.1 (2026-08-13)
+
+- Remove the Checkout column from the Payments admin table.
+
+### 9.4.0 (2026-08-13)
+
+- Add a manual **Mark Paid** action on the Payments screen for unpaid boat listings paid outside Stripe and PayPal (bank transfer, cash, comped listings).
+- First version published in this repository.
+
+### Earlier versions
+
+These are known from the project notes, not from this repository's history, so they have no dates.
+
+- **9.3**: video-field compatibility fix. Extra Video add-ons are recognized in both the Add Boat and Edit Boat forms, and legacy rows named Extra Video or Additional Video are repaired at runtime. See [`ADDON-MODULE.md`](ADDON-MODULE.md).
+- **7.5**: publish compatibility fix. Gallery IDs are stored as a comma-separated string, gallery arrays from 7.0 to 7.4 are normalized before publishing a Draft, publish-time PHP errors are caught so a third-party hook cannot show a critical-error screen, and a successful Stripe PaymentIntent can be retried through the same thank-you URL.
+- **7.4**: the seller phone field auto-formats and validates as `xxx-xxx-xxxx`.
+- **7.0**: the two JetFormBuilder payment forms (new boat, and Pay Now for a Draft) are replaced by native forms inside this plugin. See [`NATIVE-FORM-MIGRATION.md`](NATIVE-FORM-MIGRATION.md).
+- **6.3**: dedicated draft payment failure emails, with plain-language content and their own sent flags. See [`DRAFT-FAILURE-MONITORING.md`](DRAFT-FAILURE-MONITORING.md).
 ## More documentation
 
 - [`ADDON-MODULE.md`](ADDON-MODULE.md): add-on types, limits and the published-boat flow
