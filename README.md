@@ -228,10 +228,13 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
 
-### Unreleased
+### 9.5.0 (2026-10-12)
 
-Code on the production site and staging, synced into this repository on 2026-10-12 while the version number was left at 9.4.7. It differs from the `v9.4.7` tag in 24 files, mainly the native forms (`frontend/native-forms.php`), the Stripe and PayPal AJAX handlers, checkout helpers and payment logic, the add-on code, the customer, admin and abandoned emails, the abandoned-checkout cron and the unpaid-boat cron. Some admin and email files have small changes. These changes will get their own version number, with proper notes, when they are released.
+Brings this repository in line with the code running on the production site and staging, which had moved ahead of the `v9.4.7` tag without a version change. 24 files changed since 9.4.7, mainly the native forms (`frontend/native-forms.php`), the Stripe and PayPal AJAX handlers, checkout helpers and payment logic, the add-on code, the customer, admin and abandoned emails, the abandoned-checkout cron and the unpaid-boat cron. Some admin and email files have small changes.
 
+- The update checker and the `Update URI` header now point at `ringomedia-code/Ringo-Checkout` (the repository moved from `ammar458/Ringo-Checkout`).
+- Add the full README and this changelog.
+- Sites on 9.4.7 will be offered this update.
 ### 9.4.7 (2026-08-15)
 
 - Add a helper note to the motor hours field on the native forms.
