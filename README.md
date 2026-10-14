@@ -228,6 +228,11 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
 
+### 9.6.1 (2026-10-14)
+
+- Seller form: the vehicle fields are reordered on the new and edit forms to Boat Year, Boat Make, Boat Model, Boat Length, Motor Year, Motor Make, Motor Model And HP, Motor Hours (Stock Number and HIN follow). Only `frontend/native-forms.php` changed.
+- Sites on 9.6.0 will be offered this update.
+
 ### 9.6.0 (2026-10-14)
 
 New seller form flow, dealer add-on handling and photo handling. Changes are in `frontend/native-forms.php`, `frontend/enqueue.php` and `includes/payment.php`.
