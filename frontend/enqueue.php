@@ -365,7 +365,9 @@ jQuery(function($){
     // Dealer / Dealer Plus accounts pay for their plan outside the site. With no paid add-on
     // selected there is nothing to charge, so skip the payment popup; the server publishes
     // the listing and the on-success handler redirects.
-    if (window.ringoPay && window.ringoPay.isDealer && !addonIds) {
+    // If add-ons are active and not yet reviewed, fall through: the add-on popup shows first and, when
+    // nothing paid is chosen there, it publishes the listing itself.
+    if (window.ringoPay && window.ringoPay.isDealer && !addonIds && (addonsReviewed || !getAddonCatalog().length)) {
       showLoaderZeroDelay();
       return;
     }
@@ -576,7 +578,7 @@ jQuery(function($){
       var id = (addon.id || '').toString();
       var checked = selected.indexOf(id) !== -1 ? ' checked' : '';
       rows += '<label style="display:flex;gap:12px;align-items:flex-start;border:1px solid #dce6ee;border-radius:9px;padding:12px;cursor:pointer;background:#fff;">' +
-        '<input type="checkbox" class="ringo-addon-choice" value="' + $('<div>').text(id).html() + '" data-price="' + parseFloat(addon.price || 0).toFixed(2) + '"' + checked + ' style="margin-top:4px;">' +
+        '<input type="checkbox" class="ringo-addon-choice" value="' + $('<div>').text(id).html() + '" data-price="' + parseFloat(addon.price || 0).toFixed(2) + '" data-effect="' + $('<div>').text((addon.field_effect || 'none').toString()).html() + '"' + checked + ' style="margin-top:4px;">' +
         '<span style="flex:1;"><strong style="display:block;color:#112f49;">' + $('<div>').text(addon.name || id).html() + '</strong>' +
         '<small style="display:block;color:#607387;margin-top:3px;line-height:1.4;">' + $('<div>').text(addon.description || '').html() + '</small></span>' +
         '<strong style="white-space:nowrap;color:#0876b9;">' + formatMoney(addon.price || 0) + '</strong>' +
@@ -589,6 +591,7 @@ jQuery(function($){
         '<h3 style="margin:0 0 6px;font-size:22px;color:#102d46;">Add more exposure to your listing</h3>' +
         '<p style="margin:0 0 16px;color:#5d7185;font-size:14px;">Choose any add-ons below or continue without them.</p>' +
         '<div style="display:grid;gap:9px;">' + rows + '</div>' +
+        '<div id="ringoAddonSlotsNote" style="display:none;margin-top:12px;padding:10px 12px;border-radius:7px;background:#eaf5fc;color:#27506f;font-size:13px;line-height:1.4;">Extra photo and video slots unlock on your listing\'s edit page as soon as payment is complete.</div>' +
         '<div style="margin-top:16px;border-top:1px solid #dce6ee;padding-top:14px;display:grid;gap:5px;color:#33495d;font-size:14px;">' +
           '<div style="display:flex;justify-content:space-between;"><span>Listing package</span><strong>' + formatMoney(ctx.basePackagePrice) + '</strong></div>' +
           '<div style="display:flex;justify-content:space-between;"><span>Selected add-ons</span><strong id="ringoAddonTotal">$0.00</strong></div>' +
@@ -606,10 +609,14 @@ jQuery(function($){
     function calculateSelection() {
       var ids = [];
       var total = 0;
+      var unlocksSlots = false;
       $('.ringo-addon-choice:checked').each(function(){
         ids.push(($(this).val() || '').toString());
         total += parseFloat($(this).attr('data-price') || 0) || 0;
+        var effect = ($(this).attr('data-effect') || 'none').toString();
+        if (effect === 'gallery_images' || effect === 'video_fields') unlocksSlots = true;
       });
+      $('#ringoAddonSlotsNote').toggle(unlocksSlots);
       $('#ringoAddonTotal').text(formatMoney(total));
       $('#ringoAddonGrandTotal').text(formatMoney(ctx.basePackagePrice + total));
       if (window.ringoPay && window.ringoPay.isDealer) $('#ringoContinueAddons').text(ids.length ? 'Continue to Payment' : 'Publish Boat');

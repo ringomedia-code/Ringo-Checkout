@@ -228,6 +228,18 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
 
+### 9.6.0 (2026-10-14)
+
+New seller form flow, dealer add-on handling and photo handling. Changes are in `frontend/native-forms.php`, `frontend/enqueue.php` and `includes/payment.php`.
+
+- Seller form: fields are now Year, Make, Model, Length (new and edit forms). The package picker moved into Listing Basics, and the separate Step 1 and the "Selected checkout" box were removed.
+- Add-ons are offered in a popup right before payment, with the running total, instead of cards on the form. When no add-on is enabled in the dashboard the popup is skipped. Add-ons preselected with `?ringo_addons[]=` are kept.
+- Dealers: a dealer with no paid add-on publishes free from the popup, and a dealer with add-ons is charged for the add-ons only. This fixes a dealer listing being published free with the chosen add-ons dropped.
+- Photo limit: too many selected photos now keep the selection, show an inline error with a Remove button per file, and block saving until the selection is within the limit. The server-side limit is unchanged.
+- Photos removed on the edit form are now deleted from the media library (files and thumbnails) when the listing is saved.
+- The legacy `payment_status` meta is now set to `paid` when payment completes (it was left at `unpaid`).
+- Sites on 9.5.0 will be offered this update.
+
 ### 9.5.0 (2026-10-12)
 
 Brings this repository in line with the code running on the production site and staging, which had moved ahead of the `v9.4.7` tag without a version change. 24 files changed since 9.4.7, mainly the native forms (`frontend/native-forms.php`), the Stripe and PayPal AJAX handlers, checkout helpers and payment logic, the add-on code, the customer, admin and abandoned emails, the abandoned-checkout cron and the unpaid-boat cron. Some admin and email files have small changes.

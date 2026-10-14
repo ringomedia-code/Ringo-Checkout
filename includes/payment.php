@@ -199,6 +199,7 @@ function ringo_process_paid( $post_id, $provider, $provider_id, $package_name, $
 	// Core payment meta.
 	update_post_meta( $post_id, '_ringo_paid',             1 );
 	update_post_meta( $post_id, '_ringo_checkout_status',  'paid' );
+	update_post_meta( $post_id, 'payment_status',          'paid' ); // legacy field, was left at 'unpaid' after payment
 	update_post_meta( $post_id, '_ringo_payment_provider', sanitize_text_field( $provider ) );
 	ringo_update_payment_activity( $post_id, 'payment_complete', $provider, [
 		'source'      => 'ringo_process_paid',

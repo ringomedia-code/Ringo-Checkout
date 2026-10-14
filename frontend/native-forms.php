@@ -396,6 +396,16 @@ function ringo_native_valid_packages( $user_id = 0 ) {
 }
 
 /**
+ * True while the add-on popup has not been reviewed yet (new-listing form with active add-ons).
+ * The dealer is then published (free) or sent to payment (add-ons) from that popup, not on creation.
+ *
+ * @return bool
+ */
+function ringo_native_addons_pending_review() {
+	return isset( $_POST['addons_reviewed'] ) && '0' === sanitize_text_field( wp_unslash( $_POST['addons_reviewed'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+}
+
+/**
  * Publish a dealer listing that has no paid add-ons. Dealers pay for their plan outside
  * the site, so nothing is charged and no payment popup is shown. Returns the thank-you
  * URL on success, or '' when this listing still needs a payment.
@@ -564,6 +574,10 @@ function ringo_native_submission_shortcode() {
 	$max_videos          = ringo_native_max_video_fields( $package, $preselected_addons['ids'] );
 	$render_video_fields = ringo_native_renderable_video_fields();
 
+	// Add-ons are offered in a popup right before payment (see showAddonWindow() in enqueue.php), and only
+	// when at least one add-on is enabled in the dashboard. With none, that screen is skipped entirely.
+	$has_addons = ! empty( $addons_catalog );
+
 	ob_start();
 	?>
 	<div class="ringo-native-form-shell" data-ringo-native-wrapper="1204">
@@ -579,28 +593,22 @@ function ringo_native_submission_shortcode() {
 			</div>
 			<div class="ringo-native-required-note"><strong>*</strong> Required fields</div>
 		</div>
-		<form class="ringo-native-boat-form" data-form-id="1204" <?php echo $is_dealer ? 'data-ringo-dealer="1"' : ''; ?> <?php echo current_user_can( 'administrator' ) ? 'data-ringo-admin="1"' : ''; ?> method="post" enctype="multipart/form-data" novalidate>
+		<form class="ringo-native-boat-form" data-form-id="1204" <?php echo $is_dealer ? 'data-ringo-dealer="1"' : ''; ?> <?php echo current_user_can( 'administrator' ) ? 'data-ringo-admin="1"' : ''; ?> <?php echo $has_addons ? 'data-ringo-addons-pending="1"' : ''; ?> method="post" enctype="multipart/form-data" novalidate>
 			<input type="hidden" name="action" value="ringo_native_submit_boat">
 			<input type="hidden" name="nonce" value="<?php echo esc_attr( wp_create_nonce( 'ringo_native_form_nonce' ) ); ?>">
 			<input type="hidden" name="package_name" value="<?php echo esc_attr( $package ); ?>">
 			<input type="hidden" name="package_price" value="<?php echo esc_attr( isset( $prices[ $package ] ) ? (float) $prices[ $package ] : 0 ); ?>">
 			<input type="hidden" name="addon_ids" value="<?php echo esc_attr( implode( ',', $preselected_addons['ids'] ) ); ?>">
-			<input type="hidden" name="addons_reviewed" value="1">
+			<input type="hidden" name="addons_reviewed" value="<?php echo $has_addons ? '0' : '1'; ?>">
 			<input type="hidden" name="user_id" value="<?php echo esc_attr( $user->ID ); ?>">
 			<div class="ringo-native-honeypot" aria-hidden="true"><label>Website<input type="text" name="company_website" value="" tabindex="-1" autocomplete="off"></label></div>
 
-			<div class="ringo-native-addon-gate" data-ringo-addon-gate>
-				<div class="ringo-native-addon-gate-head">
-					<span class="ringo-native-form-eyebrow">Step 1</span>
-					<?php if ( $is_dealer ) : ?>
-						<h2>Choose Optional Add-ons</h2>
-						<p>Your listing is published right away. A payment popup only appears if you choose a paid add-on.</p>
-					<?php else : ?>
-						<h2>Choose Your Package and Optional Add-ons</h2>
-						<p>Form add-ons immediately change the fields and limits available in your listing form.</p>
-					<?php endif; ?>
+			<div class="ringo-native-form-body" data-ringo-form-body>
+			<div class="ringo-native-section">
+				<div class="ringo-native-section-head">
+					<span class="ringo-native-section-number">1</span>
+					<div class="ringo-native-section-copy"><h2>Listing Basics</h2><p><?php echo $is_dealer ? 'Add a clear title and description.' : 'Choose the package and add a clear title and description.'; ?></p></div>
 				</div>
-
 				<label class="ringo-native-field ringo-native-package-picker"<?php echo $is_dealer ? ' hidden style="display:none"' : ''; ?>>
 					<span>Listing Package <strong>*</strong></span>
 					<select name="package" required data-ringo-package-select>
@@ -617,60 +625,6 @@ function ringo_native_submission_shortcode() {
 					</select>
 					<small data-ringo-package-description></small>
 				</label>
-
-				<?php if ( $addons_catalog ) : ?>
-					<div class="ringo-native-addon-options">
-						<h3>Optional Add-ons</h3>
-						<div class="ringo-native-addon-grid">
-							<?php foreach ( $addons_catalog as $addon ) : ?>
-								<label class="ringo-native-addon-card">
-									<input
-										type="checkbox"
-										value="<?php echo esc_attr( $addon['id'] ); ?>"
-										data-ringo-addon-choice
-										data-price="<?php echo esc_attr( number_format( (float) $addon['price'], 2, '.', '' ) ); ?>"
-										data-addon-type="<?php echo esc_attr( $addon['addon_type'] ); ?>"
-										data-field-effect="<?php echo esc_attr( $addon['field_effect'] ); ?>"
-										data-effect-value="<?php echo esc_attr( (int) $addon['effect_value'] ); ?>"
-										<?php checked( in_array( $addon['id'], $preselected_addons['ids'], true ) ); ?>
-									>
-									<span class="ringo-native-addon-card-copy">
-										<strong><?php echo esc_html( $addon['name'] ); ?></strong>
-										<small><?php echo esc_html( $addon['description'] ); ?></small>
-									</span>
-									<span class="ringo-native-addon-card-price"><?php echo esc_html( '$' . number_format_i18n( (float) $addon['price'], 2 ) ); ?></span>
-								</label>
-							<?php endforeach; ?>
-						</div>
-					</div>
-				<?php endif; ?>
-
-				<div class="ringo-native-addon-summary">
-					<?php if ( ! $is_dealer ) : ?>
-						<div><span>Package</span><strong data-ringo-package-total>$0.00</strong></div>
-					<?php endif; ?>
-					<div><span>Add-ons</span><strong data-ringo-addon-total>$0.00</strong></div>
-					<?php if ( ! $is_dealer ) : ?>
-						<div class="ringo-native-addon-grand-total"><span>Checkout total</span><strong data-ringo-grand-total>$0.00</strong></div>
-					<?php endif; ?>
-					<div class="ringo-native-capability-summary" data-ringo-capability-summary></div>
-				</div>
-				<button type="button" class="ringo-native-submit ringo-native-start-form" data-ringo-start-form>Continue to Boat Form</button>
-			</div>
-
-			<div class="ringo-native-form-body" data-ringo-form-body hidden>
-			<div class="ringo-native-section">
-				<div class="ringo-native-section-head">
-					<span class="ringo-native-section-number">1</span>
-					<div class="ringo-native-section-copy"><h2>Listing Basics</h2><p><?php echo $is_dealer ? 'Add a clear title and description.' : 'Choose the package and add a clear title and description.'; ?></p></div>
-				</div>
-				<div class="ringo-native-selected-options">
-					<div>
-						<span>Selected checkout</span>
-						<strong data-ringo-selected-options-summary></strong>
-					</div>
-					<button type="button" data-ringo-edit-options><?php echo $is_dealer ? 'Change add-ons' : 'Change package or add-ons'; ?></button>
-				</div>
 
 				<label class="ringo-native-field">
 					<span>Boat Title <strong>*</strong></span>
@@ -740,10 +694,10 @@ function ringo_native_submission_shortcode() {
 				</div>
 
 				<div class="ringo-native-grid ringo-native-grid-2">
-					<label class="ringo-native-field"><span>Boat Make <strong>*</strong></span><select name="boat_make" required><?php echo ringo_native_term_options( 'boat-make', 'Select boat make' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
-					<label class="ringo-native-field"><span>Boat Length <strong>*</strong></span><select name="boat_length" required><?php echo ringo_native_term_options( 'boatlength', 'Select boat length' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
-					<label class="ringo-native-field"><span>Boat Model <strong>*</strong></span><input type="text" name="boat_model" required></label>
 					<label class="ringo-native-field"><span>Boat Year <strong>*</strong></span><select name="boat_year" required><?php echo ringo_native_term_options( 'boat-year', 'Select boat year' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
+					<label class="ringo-native-field"><span>Boat Make <strong>*</strong></span><select name="boat_make" required><?php echo ringo_native_term_options( 'boat-make', 'Select boat make' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
+					<label class="ringo-native-field"><span>Boat Model <strong>*</strong></span><input type="text" name="boat_model" required></label>
+					<label class="ringo-native-field"><span>Boat Length <strong>*</strong></span><select name="boat_length" required><?php echo ringo_native_term_options( 'boatlength', 'Select boat length' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
 					<label class="ringo-native-field"><span>Motor Make <strong>*</strong></span><select name="motor_make" required><?php echo ringo_native_term_options( 'motor-make', 'Select motor make' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
 					<label class="ringo-native-field"><span>Motor Model And HP <strong>*</strong></span><input type="text" name="motor_model" required></label>
 					<label class="ringo-native-field"><span>Motor Year <strong>*</strong></span><select name="motor_year" required><?php echo ringo_native_term_options( $motor_year_taxonomy, 'Select motor year' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
@@ -1121,10 +1075,10 @@ function ringo_native_edit_shortcode() {
 				</div>
 
 				<div class="ringo-native-grid ringo-native-grid-2">
-					<label class="ringo-native-field"><span>Boat Make <strong>*</strong></span><select name="boat_make" required><?php echo ringo_native_term_options( 'boat-make', 'Select boat make', ringo_native_post_term_id( $post_id, 'boat-make' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
-					<label class="ringo-native-field"><span>Boat Length <strong>*</strong></span><select name="boat_length" required><?php echo ringo_native_term_options( 'boatlength', 'Select boat length', ringo_native_post_term_id( $post_id, 'boatlength' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
-					<label class="ringo-native-field"><span>Boat Model <strong>*</strong></span><input type="text" name="boat_model" value="<?php echo esc_attr( get_post_meta( $post_id, 'boat_model', true ) ); ?>" required></label>
 					<label class="ringo-native-field"><span>Boat Year <strong>*</strong></span><select name="boat_year" required><?php echo ringo_native_term_options( 'boat-year', 'Select boat year', ringo_native_post_term_id( $post_id, 'boat-year' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
+					<label class="ringo-native-field"><span>Boat Make <strong>*</strong></span><select name="boat_make" required><?php echo ringo_native_term_options( 'boat-make', 'Select boat make', ringo_native_post_term_id( $post_id, 'boat-make' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
+					<label class="ringo-native-field"><span>Boat Model <strong>*</strong></span><input type="text" name="boat_model" value="<?php echo esc_attr( get_post_meta( $post_id, 'boat_model', true ) ); ?>" required></label>
+					<label class="ringo-native-field"><span>Boat Length <strong>*</strong></span><select name="boat_length" required><?php echo ringo_native_term_options( 'boatlength', 'Select boat length', ringo_native_post_term_id( $post_id, 'boatlength' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
 					<label class="ringo-native-field"><span>Motor Make <strong>*</strong></span><select name="motor_make" required><?php echo ringo_native_term_options( 'motor-make', 'Select motor make', ringo_native_post_term_id( $post_id, 'motor-make' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
 					<label class="ringo-native-field"><span>Motor Model And HP <strong>*</strong></span><input type="text" name="motor_model" value="<?php echo esc_attr( get_post_meta( $post_id, 'motor_model', true ) ); ?>" required></label>
 					<label class="ringo-native-field"><span>Motor Year <strong>*</strong></span><select name="motor_year" required><?php echo ringo_native_term_options( $motor_year_taxonomy, 'Select motor year', ringo_native_post_term_id( $post_id, $motor_year_taxonomy ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></select></label>
@@ -1821,7 +1775,7 @@ function ringo_ajax_native_submit_boat() {
 		);
 
 		// Dealers with no paid add-ons are published straight away: no payment popup.
-		$dealer_redirect = $is_dealer ? ringo_native_publish_dealer_listing( $post_id, $package ) : ringo_native_publish_admin_listing( $post_id, $package );
+		$dealer_redirect = $is_dealer ? ( ringo_native_addons_pending_review() ? '' : ringo_native_publish_dealer_listing( $post_id, $package ) ) : ringo_native_publish_admin_listing( $post_id, $package );
 
 		delete_transient( $lock );
 		wp_send_json_success(
@@ -1895,7 +1849,7 @@ function ringo_ajax_native_submit_boat() {
 	);
 
 	// Dealers with no paid add-ons are published straight away: no payment popup.
-	$dealer_redirect = $is_dealer ? ringo_native_publish_dealer_listing( $post_id, $package ) : ringo_native_publish_admin_listing( $post_id, $package );
+	$dealer_redirect = $is_dealer ? ( ringo_native_addons_pending_review() ? '' : ringo_native_publish_dealer_listing( $post_id, $package ) ) : ringo_native_publish_admin_listing( $post_id, $package );
 
 	delete_transient( $lock );
 	wp_send_json_success(
@@ -2235,6 +2189,21 @@ function ringo_ajax_native_update_boat() {
 		wp_send_json_error( [ 'message' => $updated->get_error_message() ], 500 );
 	}
 
+	// Photos the seller removed are deleted from the media library (files and thumbnails), not just
+	// unlinked from the gallery. Only images that were in this listing's gallery, belong to this listing
+	// and are neither the featured image nor still in the final gallery are touched.
+	$current_cover_id = (int) get_post_thumbnail_id( $post_id );
+	foreach ( array_unique( array_intersect( $remove_gallery, $current_gallery ) ) as $removed_id ) {
+		$removed_id = absint( $removed_id );
+		if ( ! $removed_id || $removed_id === $current_cover_id || in_array( $removed_id, $final_gallery, true ) ) {
+			continue;
+		}
+		$removed_post = get_post( $removed_id );
+		if ( $removed_post && 'attachment' === $removed_post->post_type && (int) $removed_post->post_parent === (int) $post_id ) {
+			wp_delete_attachment( $removed_id, true );
+		}
+	}
+
 	foreach ( $taxonomy_fields as $field ) {
 		$result = ringo_native_assign_term( $post_id, $field['taxonomy'], $field['term'], true );
 		if ( is_wp_error( $result ) ) {
@@ -2501,6 +2470,31 @@ jQuery(function($){
     };
   }
 
+  // The new-listing form has no add-on cards any more (add-ons are offered in the pre-payment popup).
+  // Add-ons preselected from the services page (?ringo_addons[]=...) arrive in the hidden addon_ids field;
+  // keep them, and read their price / photo-video effect from the catalog instead of from checkboxes.
+  function presetAddonState($form) {
+    var ids = [];
+    var total = 0;
+    var extraImages = 0;
+    var extraVideos = 0;
+    var names = [];
+    var wanted = (($form.find('[name="addon_ids"]').val() || '').toString()).split(',').map(function(s){ return $.trim(s); }).filter(Boolean);
+    var catalog = (window.ringoPay && $.isArray(window.ringoPay.addons)) ? window.ringoPay.addons : [];
+    $.each(catalog, function(_, addon){
+      var id = (addon.id || '').toString();
+      if (wanted.indexOf(id) === -1) return;
+      var effectValue = parseInt(addon.effect_value || 0, 10);
+      if (isNaN(effectValue) || effectValue < 0) effectValue = 0;
+      ids.push(id);
+      total += parseFloat(addon.price || 0) || 0;
+      if (addon.field_effect === 'gallery_images') extraImages += effectValue;
+      if (addon.field_effect === 'video_fields') extraVideos += effectValue;
+      if (addon.name) names.push(addon.name);
+    });
+    return { ids: ids, total: total, extraImages: extraImages, extraVideos: extraVideos, names: names };
+  }
+
   function syncPackage($form) {
     var $select = $form.find('select[name="package"]');
     if (!$select.length) return;
@@ -2510,7 +2504,7 @@ jQuery(function($){
     var baseImages = parseInt($option.attr('data-base-max-images') || 4, 10);
     var baseVideos = parseInt($option.attr('data-base-max-videos') || 0, 10);
     var description = ($option.attr('data-description') || '').toString();
-    var addons = selectedAddonState($form);
+    var addons = $form.find('[data-ringo-addon-choice]').length ? selectedAddonState($form) : presetAddonState($form);
 
     if (isNaN(price)) price = 0;
     if (isNaN(baseImages) || baseImages < 1) baseImages = 4;
@@ -2524,11 +2518,14 @@ jQuery(function($){
     $form.find('[name="package_name"]').val(key);
     $form.find('[name="package_price"]').val(price.toFixed(2));
     $form.find('[name="addon_ids"]').val(addons.ids.join(','));
-    $form.find('[name="addons_reviewed"]').val('1');
+    // New-listing form with active add-ons: they are reviewed in the pre-payment popup, not here.
+    var addonsPending = $form.is('[data-ringo-addons-pending]');
+    $form.find('[name="addons_reviewed"]').val(addonsPending ? '0' : '1');
     $form.find('[data-ringo-gallery]').attr('data-max-files', maxImages);
     $form.find('[data-ringo-gallery-help]').text(isDealer
       ? 'Maximum ' + maxImages + ' gallery images' + (addons.ids.length ? ' with your selected add-ons.' : '.')
       : 'Maximum ' + maxImages + ' gallery images with this package and selected add-ons.');
+    $form.find('[data-ringo-gallery]').each(function(){ refreshGalleryLimit($(this)); });
     $form.find('[data-ringo-package-description]').text(description);
     $form.find('[data-ringo-package-total]').text(formatMoney(price));
     $form.find('[data-ringo-addon-total]').text(formatMoney(addons.total));
@@ -2548,8 +2545,9 @@ jQuery(function($){
     $form.find('[data-ringo-selected-options-summary]').text(selectedSummary);
 
     // Nothing to pay for administrators, or for dealers with no paid add-on: the button publishes.
-    var publishesFree = $form.is('[data-ringo-admin]') || (isDealer && !addons.ids.length);
-    $form.find('button.ringo-native-submit').not('[data-ringo-start-form]').text(publishesFree ? 'Publish Boat' : 'Continue to Payment');
+    var publishesFree = $form.is('[data-ringo-admin]') || (isDealer && !addons.ids.length && !addonsPending);
+    var submitLabel = publishesFree ? 'Publish Boat' : (addonsPending && !$form.is('[data-ringo-admin]') ? 'Continue' : 'Continue to Payment');
+    $form.find('button.ringo-native-submit').not('[data-ringo-start-form]').text(submitLabel);
 
     $form.find('[data-ringo-video]').each(function(){
       var $field = $(this);
@@ -2646,17 +2644,61 @@ jQuery(function($){
     validatePhone(this);
   });
 
-  $(document).on('change', '.ringo-native-boat-form [data-ringo-gallery]', function(){
-    var $input = $(this);
+  // Gallery limit: keep what the user picked, say how many are too many, and let them remove files
+  // one by one. The form cannot be submitted while the selection is over the limit.
+  function refreshGalleryLimit($input) {
+    var input = $input.get(0);
+    if (!input) return;
     var $form = $input.closest('form');
     var maxFiles = parseInt($input.attr('data-max-files') || 0, 10);
     var currentFiles = parseInt($input.attr('data-current-files') || 0, 10);
     var removedFiles = $form.find('[name="remove_gallery[]"]:checked').length;
     var availableFiles = Math.max(0, maxFiles - Math.max(0, currentFiles - removedFiles));
-    if (maxFiles > 0 && this.files && this.files.length > availableFiles) {
-      alert('You can add up to ' + availableFiles + ' more gallery image' + (availableFiles === 1 ? '' : 's') + '.');
-      this.value = '';
+    var files = input.files ? Array.prototype.slice.call(input.files) : [];
+    var over = maxFiles > 0 && files.length > availableFiles;
+
+    var $box = $input.parent().find('[data-ringo-gallery-selection]');
+    if (!$box.length) {
+      var $help = $input.parent().find('[data-ringo-gallery-help]');
+      $box = $('<div data-ringo-gallery-selection></div>');
+      if ($help.length) $box.insertAfter($help.last()); else $box.insertAfter($input);
     }
+    $box.empty();
+    input.setCustomValidity(over ? 'Too many gallery images selected. Remove some to continue.' : '');
+    if (!files.length) return;
+
+    if (over) {
+      var extra = files.length - availableFiles;
+      $('<div role="alert" style="margin:8px 0;padding:9px 11px;border:1px solid #e0a3a3;border-radius:7px;background:#fdf1f1;color:#9b1c1c;font-size:13px;line-height:1.4;"></div>')
+        .text('You selected ' + files.length + ' image' + (files.length === 1 ? '' : 's') + ', but you can add only ' + availableFiles + ' more (maximum ' + maxFiles + ' in total). Remove ' + extra + ' image' + (extra === 1 ? '' : 's') + ' from the list below to continue.')
+        .appendTo($box);
+    }
+    var $list = $('<ul style="list-style:none;margin:8px 0 0;padding:0;display:grid;gap:5px;"></ul>').appendTo($box);
+    $.each(files, function(i, file){
+      var $row = $('<li style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 10px;border:1px solid #dce6ee;border-radius:6px;background:#fff;font-size:13px;"></li>');
+      $('<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>').text(file.name).appendTo($row);
+      $('<button type="button" data-ringo-gallery-remove="' + i + '" style="border:0;background:transparent;color:#9b1c1c;cursor:pointer;font-weight:700;font-size:13px;">Remove</button>').appendTo($row);
+      $list.append($row);
+    });
+  }
+
+  $(document).on('change', '.ringo-native-boat-form [data-ringo-gallery]', function(){
+    refreshGalleryLimit($(this));
+  });
+
+  $(document).on('change', '.ringo-native-boat-form [name="remove_gallery[]"]', function(){
+    $(this).closest('form').find('[data-ringo-gallery]').each(function(){ refreshGalleryLimit($(this)); });
+  });
+
+  $(document).on('click', '.ringo-native-boat-form [data-ringo-gallery-remove]', function(){
+    var $input = $(this).closest('form').find('[data-ringo-gallery]').first();
+    var input = $input.get(0);
+    var drop = parseInt($(this).attr('data-ringo-gallery-remove'), 10);
+    if (!input || !input.files || typeof DataTransfer === 'undefined') return;
+    var transfer = new DataTransfer();
+    Array.prototype.forEach.call(input.files, function(file, i){ if (i !== drop) transfer.items.add(file); });
+    input.files = transfer.files;
+    refreshGalleryLimit($input);
   });
 
   $(document).on('submit', 'form.ringo-native-boat-form', function(event){
