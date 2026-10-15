@@ -285,6 +285,13 @@ function ringo_native_pay_now_footer_fallback() {
  * @return string
  */
 function ringo_native_login_required_message() {
+	// The form can be rendered twice (page shortcode plus auto-injection); show the notice once per page load.
+	static $shown = false;
+	if ( $shown ) {
+		return '';
+	}
+	$shown = true;
+
 	$current    = home_url( isset( $_SERVER['REQUEST_URI'] ) ? wp_unslash( $_SERVER['REQUEST_URI'] ) : '/' );
 	$login_page = home_url( '/register-login/' );
 	$url        = add_query_arg( 'redirect_to', $current, $login_page );
@@ -1699,6 +1706,14 @@ function ringo_ajax_native_submit_boat() {
 		wp_send_json_error( [ 'message' => 'The boat ownership term is not configured. Please contact support.' ], 500 );
 	}
 
+	// Every new listing starts as "Available" (the submission form has no status field).
+	$available = get_term_by( 'slug', 'available', 'boat-status' );
+	if ( $available && ! is_wp_error( $available ) ) {
+		wp_set_object_terms( $post_id, [ (int) $available->term_id ], 'boat-status', false );
+	} else {
+		ringo_log( 'Native submit: Available boat-status term not found', [ 'post_id' => $post_id ] );
+	}
+
 	$meta = [
 		'city'                => $city,
 		'first_name'          => $first,
@@ -1981,27 +1996,12 @@ function ringo_native_send_edit_notifications( $post_id ) {
 	$view_url     = get_permalink( $post_id );
 	$headers      = [ 'Content-Type: text/html; charset=UTF-8' ];
 
-	if ( $seller_email && is_email( $seller_email ) ) {
-		$seller_body = '<div style="font-family:Arial,sans-serif;max-width:620px;margin:20px auto;padding:24px;border:1px solid #dfe6ed;border-radius:8px;color:#263648">'
-			. '<h2 style="margin-top:0;color:#0876b9">Your boat listing was updated</h2>'
-			. '<p>Your changes to <strong>' . esc_html( $title ) . '</strong> were saved.</p>'
-			. '<p><a href="' . esc_url( $view_url ) . '" style="display:inline-block;padding:11px 18px;background:#0876b9;color:#fff;text-decoration:none;border-radius:5px">View Boat</a></p>'
-			. '<p style="margin-top:24px;color:#667486;font-size:13px">BassBoat4Sale</p></div>';
-		$seller_sent = wp_mail( $seller_email, 'Your boat listing was updated', $seller_body, $headers );
-		ringo_log( 'Native edit seller email', [ 'post_id' => $post_id, 'sent' => (bool) $seller_sent, 'recipient' => $seller_email ] );
+	if ( function_exists( 'ringo_send_customer_edit_email' ) ) {
+		ringo_send_customer_edit_email( $post_id );
 	}
 
-	if ( $admin_email && is_email( $admin_email ) ) {
-		$admin_body = '<div style="font-family:Arial,sans-serif;max-width:620px;margin:20px auto;padding:24px;border:1px solid #dfe6ed;border-radius:8px;color:#263648">'
-			. '<h2 style="margin-top:0;color:#0876b9">Boat listing updated</h2>'
-			. '<p>The seller updated <strong>' . esc_html( $title ) . '</strong>.</p>'
-			. '<p><strong>Seller:</strong> ' . esc_html( trim( (string) get_post_meta( $post_id, 'first_name', true ) . ' ' . (string) get_post_meta( $post_id, 'last_name', true ) ) ) . '<br>'
-			. '<strong>Email:</strong> ' . esc_html( (string) get_post_meta( $post_id, 'email', true ) ) . '<br>'
-			. '<strong>Phone:</strong> ' . esc_html( (string) get_post_meta( $post_id, 'phone', true ) ) . '</p>'
-			. '<p><a href="' . esc_url( $edit_url ) . '" style="display:inline-block;padding:11px 18px;background:#0876b9;color:#fff;text-decoration:none;border-radius:5px">Review Listing</a></p>'
-			. '<p style="margin-top:24px;color:#667486;font-size:13px">BassBoat4Sale</p></div>';
-		$admin_sent = wp_mail( $admin_email, 'Boat listing updated: ' . $title, $admin_body, $headers );
-		ringo_log( 'Native edit admin email', [ 'post_id' => $post_id, 'sent' => (bool) $admin_sent, 'recipient' => $admin_email ] );
+	if ( function_exists( 'ringo_send_admin_edit_email' ) ) {
+		ringo_send_admin_edit_email( $post_id );
 	}
 }
 

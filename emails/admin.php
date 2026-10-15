@@ -247,3 +247,138 @@ function ringo_send_admin_listing_email( $post_id, $package_name, $package_price
 
 	return (bool) $sent;
 }
+
+/**
+ * Send the administrator the detailed "listing edited" notification.
+ *
+ * Mirrors the former JetFormBuilder edit-form admin email (form 1811).
+ *
+ * @param  int $post_id Boat post ID.
+ * @return bool
+ */
+function ringo_send_admin_edit_email( $post_id ) {
+	$post = get_post( $post_id );
+	if ( ! $post ) {
+		return false;
+	}
+
+	$to = sanitize_email( (string) get_option( 'admin_email' ) );
+	if ( ! $to || ! is_email( $to ) ) {
+		return false;
+	}
+
+	$get_meta = function ( $key ) use ( $post_id ) {
+		$v = get_post_meta( $post_id, $key, true );
+		if ( is_array( $v ) ) {
+			$v = implode( ', ', array_map( 'sanitize_text_field', $v ) );
+		}
+		return sanitize_text_field( trim( (string) $v ) );
+	};
+
+	$terms = function ( $taxonomy ) use ( $post_id ) {
+		if ( ! taxonomy_exists( $taxonomy ) ) {
+			return '';
+		}
+		$t = wp_get_post_terms( $post_id, $taxonomy, [ 'fields' => 'names' ] );
+		return ( ! is_wp_error( $t ) && $t ) ? implode( ', ', $t ) : '';
+	};
+
+	$package   = function_exists( 'ringo_native_existing_boat_package' ) ? (string) ringo_native_existing_boat_package( $post_id, (int) $post->post_author ) : '';
+	$author    = get_userdata( (int) $post->post_author );
+	$reply_to  = sanitize_email( (string) get_post_meta( $post_id, 'email', true ) );
+	$view_url  = get_permalink( $post_id ) ?: home_url( '/' );
+	$price_raw = $get_meta( 'price' );
+	$price     = ( '' === $price_raw || (float) $price_raw <= 0 ) ? 'Contact For Pricing' : '$' . number_format_i18n( (float) $price_raw, 2 );
+
+	$data = [
+		'title'        => get_the_title( $post_id ),
+		'package'      => ucfirst( $package ),
+		'boat_status'  => $terms( 'boat-status' ),
+		'first_name'   => $get_meta( 'first_name' ),
+		'last_name'    => $get_meta( 'last_name' ),
+		'email'        => $reply_to ?: $get_meta( 'email' ),
+		'phone'        => $get_meta( 'phone' ),
+		'price'        => $price,
+		'boat_make'    => $terms( 'boat-make' ),
+		'boat_model'   => $get_meta( 'boat_model' ),
+		'boat_year'    => $terms( 'boat-year' ),
+		'motor_make'   => $terms( 'motor-make' ),
+		'motor_model'  => $get_meta( 'motor_model' ),
+		'motor_year'   => $terms( taxonomy_exists( 'motor-year' ) ? 'motor-year' : 'boat-year' ),
+		'motor_hours'  => $get_meta( 'motor_hours' ),
+		'user'         => $author ? $author->display_name . ' (#' . $author->ID . ')' : (string) $post->post_author,
+		'post_id'      => (string) $post_id,
+		'edit_date'    => wp_date( 'F j, Y g:i a' ),
+	];
+
+	$d = function ( $key ) use ( $data ) {
+		return esc_html( $data[ $key ] ?? '' );
+	};
+
+	$section = function ( $heading, array $rows ) {
+		$out  = '<h3 style="color: #1998D0; border-bottom: 2px solid #1998D0; padding-bottom: 5px; margin-top: 25px;">' . esc_html( $heading ) . '</h3>';
+		$out .= '<table style="width: 100%; border-collapse: collapse; margin-top: 15px;">';
+		$last = count( $rows ) - 1;
+		$i    = 0;
+		foreach ( $rows as $label => $value ) {
+			$border = ( $i++ === $last ) ? '' : ' border-bottom: 1px solid #eeeeee;';
+			$out   .= '<tr><td style="padding: 8px 10px;' . $border . ' width: 45%;"><strong>' . esc_html( $label ) . ':</strong></td>'
+				. '<td style="padding: 8px 10px;' . $border . '">' . $value . '</td></tr>';
+		}
+		return $out . '</table>';
+	};
+
+	$body  = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Boat Listing Updated</title></head>';
+	$body .= '<body style="font-family: Arial, sans-serif; color: #333333; margin: 0; padding: 0; background-color: #f6f6f6;">';
+	$body .= '<div style="max-width: 600px; margin: 20px auto; background: #ffffff; border: 1px solid #e0e0e0; border-radius: 5px; overflow: hidden;">';
+	$body .= '<div style="background-color: #1998D0; padding: 20px; text-align: center; color: #ffffff; font-size: 22px; font-weight: bold;">Boat Listing Updated &mdash; Review Required</div>';
+	$body .= '<div style="padding: 20px;"><p>Dear BassBoat4Sale,</p><p>A user has edited their boat listing. Please review the updated details below.</p>';
+	$body .= $section( 'Listing Information', [
+		'Post Title'   => $d( 'title' ),
+		'Package Name' => $d( 'package' ),
+		'Boat Status'  => $d( 'boat_status' ),
+	] );
+	$body .= $section( 'Contact Information', [
+		'First Name' => $d( 'first_name' ),
+		'Last Name'  => $d( 'last_name' ),
+		'Email'      => $d( 'email' ),
+		'Phone'      => $d( 'phone' ),
+	] );
+	$body .= $section( 'Boat Details', [
+		'Price'      => $d( 'price' ),
+		'Boat Make'  => $d( 'boat_make' ),
+		'Boat Model' => $d( 'boat_model' ),
+		'Boat Year'  => $d( 'boat_year' ),
+	] );
+	$body .= $section( 'Motor Information', [
+		'Motor Make'  => $d( 'motor_make' ),
+		'Motor Model' => $d( 'motor_model' ),
+		'Motor Year'  => $d( 'motor_year' ),
+		'Motor Hours' => $d( 'motor_hours' ),
+	] );
+	$body .= $section( 'Additional Information', [
+		'User'      => $d( 'user' ),
+		'Post ID'   => $d( 'post_id' ),
+		'Edit Date' => $d( 'edit_date' ),
+	] );
+	$body .= '<p style="margin-top: 25px; text-align: center;"><a href="' . esc_url( $view_url ) . '" style="background-color: #1998D0; color: #ffffff; padding: 12px 30px; text-decoration: none; border-radius: 4px; font-size: 16px; font-weight: bold; display: inline-block;">View Boat</a></p>';
+	$body .= '<p style="margin-top: 25px;">Thank You,<br><strong>BassBoat4Sale</strong></p>';
+	$body .= '<p style="color: #888888; font-size: 14px;">Post ID: ' . $d( 'post_id' ) . '</p></div>';
+	$body .= '<div style="text-align: center; font-size: 12px; color: #888888; padding: 15px; border-top: 1px solid #e0e0e0;">&copy; ' . esc_html( wp_date( 'Y' ) ) . ' BassBoat4Sale. All rights reserved.</div>';
+	$body .= '</div></body></html>';
+
+	$subject = $post_id . ' - ' . html_entity_decode( wp_strip_all_tags( get_the_title( $post_id ) ), ENT_QUOTES, 'UTF-8' ) . ' - Was Updated';
+
+	$headers = [
+		'Content-Type: text/html; charset=UTF-8',
+		'From: BassBoat4Sale <ammar@ringomedia.com>',
+	];
+	if ( $reply_to && is_email( $reply_to ) ) {
+		$headers[] = 'Reply-To: ' . $reply_to;
+	}
+
+	$sent = wp_mail( $to, $subject, $body, $headers );
+	ringo_log( 'Native edit admin email', [ 'post_id' => $post_id, 'sent' => (bool) $sent, 'recipient' => $to ] );
+
+	return (bool) $sent;
+}

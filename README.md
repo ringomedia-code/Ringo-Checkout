@@ -228,6 +228,14 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
 
+### 9.6.2 (2026-10-15)
+
+- Edit emails: the admin email after a seller edits a paid listing is now the full detailed template (listing, contact, boat and motor details, edit date, View Boat button; subject `ID - title - Was Updated`), and the seller email is a branded "Your Listing Was Updated" message with From and Reply-To headers. Changes are in `emails/admin.php`, `emails/customer.php` and `frontend/native-forms.php`.
+- New listings are now always given the boat status "Available" on submission (the form has no status field, so it was left empty). The edit form is unchanged.
+- The "sign in or create an account" notice is printed once per page load, so it no longer shows twice on `/add-boat/` when the form is rendered twice.
+- Styles: `.ringo-native-notice` margin is now `165px auto` (`frontend/assets/native-forms.css`).
+- Sites on 9.6.1 will be offered this update.
+
 ### 9.6.1 (2026-10-14)
 
 - Seller form: the vehicle fields are reordered on the new and edit forms to Boat Year, Boat Make, Boat Model, Boat Length, Motor Year, Motor Make, Motor Model And HP, Motor Hours (Stock Number and HIN follow). Only `frontend/native-forms.php` changed.

@@ -120,3 +120,56 @@ function ringo_send_publish_email( $post_id, $package_name, $package_price ) {
 
 	return (bool) $sent;
 }
+
+/**
+ * Send the seller the "listing updated" confirmation after editing a paid boat.
+ *
+ * Styled after the former JetFormBuilder edit-form customer email (form 1811).
+ *
+ * @param  int $post_id Boat post ID.
+ * @return bool
+ */
+function ringo_send_customer_edit_email( $post_id ) {
+	$post = get_post( $post_id );
+	if ( ! $post ) {
+		return false;
+	}
+
+	$to = sanitize_email( (string) get_post_meta( $post_id, 'email', true ) );
+	if ( ! $to || ! is_email( $to ) ) {
+		return false;
+	}
+
+	$view_url = get_permalink( $post_id ) ?: home_url( '/' );
+	$title    = html_entity_decode( wp_strip_all_tags( get_the_title( $post_id ) ), ENT_QUOTES, 'UTF-8' );
+
+	$body  = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Your Listing Was Updated</title></head>';
+	$body .= '<body style="margin:0; padding:0; background-color:#f6f6f6; font-family: Arial, sans-serif;">';
+	$body .= '<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f6f6f6"><tr><td align="center" style="padding:20px;">';
+	$body .= '<table width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="border-radius:5px; overflow:hidden; border:1px solid #e0e0e0;">';
+	$body .= '<tr><td align="center" bgcolor="#1998D0" style="padding:20px; color:#ffffff; font-size:24px; font-weight:bold;">Your Listing Was Updated</td></tr>';
+	$body .= '<tr><td style="padding:20px; color:#333333; font-size:16px; line-height:1.6;">';
+	$body .= '<p style="margin:0 0 15px;">Your changes to <strong>' . esc_html( $title ) . '</strong> have been saved and are now live on our website.</p>';
+	$body .= '<h3 style="color:#1998D0; margin:20px 0 10px; border-bottom:2px solid #1998D0; padding-bottom:5px;">What You Can Do Now</h3>';
+	$body .= '<ul style="padding-left:20px; margin:0;">';
+	$body .= '<li style="margin-bottom:10px;"><strong>Manage Your Listing</strong><br>Update details, add more photos, or make edits anytime.</li>';
+	$body .= '<li style="margin-bottom:10px;"><strong>Share &amp; Promote</strong><br>Share your listing link to reach more buyers.</li>';
+	$body .= '</ul>';
+	$body .= '<p style="margin:20px 0 0;">Need help? <a href="mailto:support@bassboat4sale.com" style="color:#1998D0; text-decoration:none;">Contact our team</a> and we\'ll be glad to assist you.</p>';
+	$body .= '<p style="margin-top:25px; text-align:center;"><a href="' . esc_url( $view_url ) . '" style="background-color:#1998D0; color:#ffffff; padding:12px 30px; text-decoration:none; border-radius:4px; font-size:16px; font-weight:bold; display:inline-block;">View Boat</a></p>';
+	$body .= '<p style="margin-top:25px;">Thank You,<br><strong>BassBoat4Sale</strong></p>';
+	$body .= '</td></tr>';
+	$body .= '<tr><td align="center" style="font-size:12px; color:#888888; padding:15px; border-top:1px solid #e0e0e0;">&copy; ' . esc_html( wp_date( 'Y' ) ) . ' BassBoat4Sale. All rights reserved.</td></tr>';
+	$body .= '</table></td></tr></table></body></html>';
+
+	$headers = [
+		'Content-Type: text/html; charset=UTF-8',
+		'From: BassBoat4Sale <ammar@ringomedia.com>',
+		'Reply-To: ' . sanitize_email( (string) get_option( 'admin_email' ) ),
+	];
+
+	$sent = wp_mail( $to, 'Your Listing Was Updated', $body, $headers );
+	ringo_log( 'Native edit seller email', [ 'post_id' => $post_id, 'sent' => (bool) $sent, 'recipient' => $to ] );
+
+	return (bool) $sent;
+}
