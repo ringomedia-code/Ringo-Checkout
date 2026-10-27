@@ -697,7 +697,7 @@ function ringo_native_submission_shortcode() {
 
 				<div class="ringo-native-grid ringo-native-grid-2 ringo-native-price-row">
 					<label class="ringo-native-field ringo-price-field"><span>Price <strong>*</strong></span><input type="number" name="price" min="0" step="0.01" required></label>
-					<div class="ringo-native-choice-box"><label class="ringo-native-check"><input type="checkbox" name="price_bracket" value="Contact For Pricing" data-ringo-contact-price> <span>Contact For Pricing</span></label></div>
+					<div class="ringo-native-choice-box"><label class="ringo-native-check"><input type="checkbox" name="contact_for_pricing" value="Contact For Pricing" data-ringo-contact-price> <span>Contact For Pricing</span></label></div>
 				</div>
 
 				<div class="ringo-native-grid ringo-native-grid-2">
@@ -1109,7 +1109,7 @@ function ringo_native_edit_shortcode() {
 
 				<div class="ringo-native-grid ringo-native-grid-2 ringo-native-price-row">
 					<label class="ringo-native-field ringo-price-field"><span>Price <strong>*</strong></span><input type="number" name="price" min="0" step="0.01" value="<?php echo esc_attr( get_post_meta( $post_id, 'price', true ) ); ?>" <?php echo $contact_price ? '' : 'required'; ?>></label>
-					<div class="ringo-native-choice-box"><label class="ringo-native-check"><input type="checkbox" name="price_bracket" value="Contact For Pricing" data-ringo-contact-price <?php checked( $contact_price ); ?>> <span>Contact For Pricing</span></label></div>
+					<div class="ringo-native-choice-box"><label class="ringo-native-check"><input type="checkbox" name="contact_for_pricing" value="Contact For Pricing" data-ringo-contact-price <?php checked( $contact_price ); ?>> <span>Contact For Pricing</span></label></div>
 				</div>
 
 				<div class="ringo-native-grid ringo-native-grid-2">
@@ -1609,7 +1609,7 @@ function ringo_ajax_native_submit_boat() {
 	$phone        = ringo_native_format_phone( $phone_raw );
 	$city      = ringo_native_post_text( 'city' );
 	$agreement = ! empty( $_POST['agreements'] );
-	$contact   = ! empty( $_POST['price_bracket'] );
+	$contact   = ! empty( $_POST['contact_for_pricing'] );
 	$price     = isset( $_POST['price'] ) ? (float) wp_unslash( $_POST['price'] ) : 0;
 
 	$required_text = [
@@ -1751,7 +1751,6 @@ function ringo_ajax_native_submit_boat() {
 		'last_name'           => $last,
 		'email'               => $email,
 		'phone'               => $phone,
-		'price_bracket'       => $contact ? 'Contact For Pricing' : '',
 		'contact_for_pricing' => $contact ? 'Contact For Pricing' : '',
 		'price'               => $contact ? '0' : number_format( $price, 2, '.', '' ),
 		'boat_model'          => ringo_native_post_text( 'boat_model' ),
@@ -2082,7 +2081,7 @@ function ringo_ajax_native_update_boat() {
 	$phone_digits = preg_replace( '/\D+/', '', $phone_raw );
 	$phone        = ringo_native_format_phone( $phone_raw );
 	$city         = ringo_native_post_text( 'city' );
-	$contact      = ! empty( $_POST['price_bracket'] );
+	$contact      = ! empty( $_POST['contact_for_pricing'] );
 	$price        = isset( $_POST['price'] ) ? (float) wp_unslash( $_POST['price'] ) : 0;
 	$paid         = ringo_native_boat_is_paid( $post_id );
 	$package      = ringo_native_existing_boat_package( $post_id, (int) $post->post_author );
@@ -2250,7 +2249,6 @@ function ringo_ajax_native_update_boat() {
 		'last_name'           => $last,
 		'email'               => $email,
 		'phone'               => $phone,
-		'price_bracket'       => $contact ? 'Contact For Pricing' : '',
 		'contact_for_pricing' => $contact ? 'Contact For Pricing' : '',
 		'price'               => $contact ? '0' : number_format( $price, 2, '.', '' ),
 		'boat_model'          => ringo_native_post_text( 'boat_model' ),

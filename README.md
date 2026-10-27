@@ -228,6 +228,11 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
 
+### 9.6.4 (2026-10-28)
+
+- Edit and new-listing forms: the "Contact For Pricing" checkbox was submitted under the field name `price_bracket`, the same name the feed-sync import uses for a dealer boat's price-range meta. Every save (new listing or edit) overwrote that dealer analytics field with `"Contact For Pricing"` or blanked it, regardless of the checkbox. The checkbox now submits as `contact_for_pricing`; the save handlers write only the `contact_for_pricing` meta and no longer touch `price_bracket`. Only `frontend/native-forms.php` changed.
+- Sites on 9.6.3 will be offered this update.
+
 ### 9.6.3 (2026-10-27)
 
 - Edit form: fixed the "Contact For Pricing" checkbox being incorrectly pre-checked (and the Price field disabled) on dealer (`dlr_boats`) listings. The feed-sync import writes a `price_bracket` meta value as a price *range* for analytics, unrelated to whether the seller actually chose Contact For Pricing — the edit form was treating any non-empty `price_bracket` as that flag. Dealer listings now only count an exact "Contact For Pricing" / `contact_for_price` / `yes` value; regular `boats` listings are unchanged. Only `frontend/native-forms.php` changed.
