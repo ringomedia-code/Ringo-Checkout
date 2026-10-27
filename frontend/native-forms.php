@@ -898,6 +898,37 @@ function ringo_native_multiple_upload_count( $field ) {
  *
  * @return string
  */
+/**
+ * Determine whether a boat listing's edit form should treat Price as "Contact For Pricing"
+ * (checkbox pre-checked, Price input disabled/hidden).
+ *
+ * Dealer listings (`dlr_boats`) also carry a `price_bracket` meta value written by the
+ * feed-sync export as a price RANGE (e.g. "10000-30000") for analytics, unrelated to this
+ * flag — so for dealer listings only an exact "Contact For Pricing" / "yes" value counts.
+ * Regular `boats` listings keep the original non-empty-value check unchanged.
+ *
+ * @param int    $post_id   Boat post ID.
+ * @param string $post_type Boat post type ('boats' or 'dlr_boats').
+ * @return bool
+ */
+function ringo_native_boat_contact_price( $post_id, $post_type ) {
+	$price_bracket = (string) get_post_meta( $post_id, 'price_bracket', true );
+	$contact_flag  = (string) get_post_meta( $post_id, 'contact_for_pricing', true );
+
+	if ( 'dlr_boats' === $post_type ) {
+		// Real data uses three different spellings for "the seller chose Contact For
+		// Pricing": the current native form writes "Contact For Pricing", the legacy
+		// JetFormBuilder flow wrote "contact_for_price", and `contact_for_pricing` uses
+		// "yes"/"no". A bucketed price range (e.g. "10000-30000") matches none of these.
+		$truthy = [ 'contact for pricing', 'contact_for_price', 'yes' ];
+
+		return in_array( strtolower( trim( $price_bracket ) ), $truthy, true )
+			|| in_array( strtolower( trim( $contact_flag ) ), $truthy, true );
+	}
+
+	return '' !== trim( $price_bracket ) || '' !== trim( $contact_flag );
+}
+
 function ringo_native_edit_shortcode() {
 	$GLOBALS['ringo_native_edit_form_rendered'] = true;
 
@@ -933,7 +964,7 @@ function ringo_native_edit_shortcode() {
 	$max_gallery         = ringo_native_max_gallery_images( (int) $post->post_author, $package, $saved_addon_ids );
 	$max_videos          = ringo_native_max_video_fields( $package, $saved_addon_ids );
 	$render_video_fields = max( ringo_native_renderable_video_fields(), $max_videos );
-	$contact_price       = '' !== trim( (string) get_post_meta( $post_id, 'price_bracket', true ) ) || '' !== trim( (string) get_post_meta( $post_id, 'contact_for_pricing', true ) );
+	$contact_price       = ringo_native_boat_contact_price( $post_id, $post->post_type );
 	$email               = sanitize_email( (string) get_post_meta( $post_id, 'email', true ) );
 	$email               = $email ?: $user->user_email;
 	$button_label        = $paid ? 'Update Listing' : 'Pay Now';

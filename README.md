@@ -228,6 +228,11 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
 
+### 9.6.3 (2026-10-27)
+
+- Edit form: fixed the "Contact For Pricing" checkbox being incorrectly pre-checked (and the Price field disabled) on dealer (`dlr_boats`) listings. The feed-sync import writes a `price_bracket` meta value as a price *range* for analytics, unrelated to whether the seller actually chose Contact For Pricing — the edit form was treating any non-empty `price_bracket` as that flag. Dealer listings now only count an exact "Contact For Pricing" / `contact_for_price` / `yes` value; regular `boats` listings are unchanged. Only `frontend/native-forms.php` changed.
+- Sites on 9.6.2 will be offered this update.
+
 ### 9.6.2 (2026-10-15)
 
 - Edit emails: the admin email after a seller edits a paid listing is now the full detailed template (listing, contact, boat and motor details, edit date, View Boat button; subject `ID - title - Was Updated`), and the seller email is a branded "Your Listing Was Updated" message with From and Reply-To headers. Changes are in `emails/admin.php`, `emails/customer.php` and `frontend/native-forms.php`.
