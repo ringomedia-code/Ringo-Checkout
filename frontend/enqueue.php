@@ -941,7 +941,7 @@ jQuery(function($){
       showChooser(ctx);
     });
 
-    $('#ringoStripePayBtn').on('click', function(){
+    function attemptStripePayment(){
       $('#ringoStripePayBtn').prop('disabled', true).css('opacity', '0.6');
       showStripeMsg('');
 
@@ -1072,6 +1072,33 @@ jQuery(function($){
         ringoPaymentInProgress = false;
         reportPaymentCondition(timedOut ? 'gateway_timeout' : 'stripe_intent_error', message + (errorThrown ? ' ' + errorThrown : ''), 'stripe', 'stripe_intent_request');
       });
+    }
+
+    // Real users close the browser or tab right after paying (or right after a
+    // decline) - a redirect-timing fix alone cannot protect photos uploading in
+    // the background at that point. Block the actual payment instead, so money
+    // only changes hands once photos are confirmed uploaded (or the seller is
+    // told to retry before paying).
+    $('#ringoStripePayBtn').on('click', function(){
+      var upload = window.ringoNativeAssetUploadPromise;
+      if (upload && typeof upload.state === 'function' && upload.state() === 'pending') {
+        $('#ringoStripePayBtn').prop('disabled', true).css('opacity', '0.6');
+        showStripeMsg('Finishing photo upload before payment, please wait...');
+        upload.always(function(){
+          if (window.ringoNativeAssetUploadStatus === 'failed') {
+            $('#ringoStripePayBtn').prop('disabled', true).css('opacity', '0.6');
+            showStripeMsg('Your photos did not finish uploading. Please go back and re-select your images before paying.');
+            return;
+          }
+          attemptStripePayment();
+        });
+        return;
+      }
+      if (window.ringoNativeAssetUploadStatus === 'failed') {
+        showStripeMsg('Your photos did not finish uploading. Please go back and re-select your images before paying.');
+        return;
+      }
+      attemptStripePayment();
     });
   }
 
@@ -1127,8 +1154,7 @@ jQuery(function($){
 
     function showPPMsg(m){ $('#ringoPayPalMsg').text(m || '').show(); }
 
-    paypal.Buttons({
-      createOrder: function(){
+    function beginPaypalOrder(){
         touchPaymentState('paypal_order_request', 'paypal');
         return $.ajax({
           url: window.ringoPay.ajaxUrl,
@@ -1176,6 +1202,29 @@ jQuery(function($){
           reportPaymentCondition(timedOut ? 'gateway_timeout' : 'paypal_no_response', message + (errorThrown ? ' ' + errorThrown : ''), 'paypal', 'paypal_order_request');
           throw new Error(message);
         });
+    }
+
+    paypal.Buttons({
+      // Same reasoning as the Stripe Pay button: a real user can close the browser
+      // right after approving (or right after a decline), so block the actual
+      // order/payment until photos are confirmed uploaded, instead of only
+      // delaying the post-payment redirect.
+      createOrder: function(){
+        var upload = window.ringoNativeAssetUploadPromise;
+        function proceed(){
+          if (window.ringoNativeAssetUploadStatus === 'failed') {
+            showPPMsg('Your photos did not finish uploading. Please go back and re-select your images before paying.');
+            return $.Deferred().reject().promise();
+          }
+          return beginPaypalOrder();
+        }
+        if (upload && typeof upload.state === 'function' && upload.state() === 'pending') {
+          showPPMsg('Finishing photo upload before payment, please wait...');
+          var gate = $.Deferred();
+          upload.always(function(){ gate.resolve(); });
+          return gate.promise().then(proceed);
+        }
+        return proceed();
       },
 
       onApprove: function(data){
