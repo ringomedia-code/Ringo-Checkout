@@ -37,6 +37,7 @@ function ringo_get_draft_failure_label( $condition ) {
 		'payment_cancelled'         => 'Payment cancelled',
 		'payment_setup_error'       => 'Payment setup error',
 		'payment_incomplete'        => 'Payment did not complete',
+		'native_assets_stuck'       => 'Listing photos never finished uploading',
 	];
 
 	$condition = sanitize_key( (string) $condition );

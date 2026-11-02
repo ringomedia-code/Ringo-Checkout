@@ -424,24 +424,33 @@ jQuery(function($){
   }
 
   function redirectAfterNativeAssets(url) {
-    var upload = window.ringoNativeAssetUploadPromise;
-    if (!upload || typeof upload.always !== 'function') {
-      window.location.href = url;
-      return;
-    }
+    var deadline = Date.now() + 2000; // give the background-upload promise a moment to appear
+    (function waitForPromise(){
+      var upload = window.ringoNativeAssetUploadPromise;
+      if (upload && typeof upload.always === 'function') {
+        ringoPaymentInProgress = true;
+        var redirected = false;
+        var finish = function(){
+          if (redirected) return;
+          redirected = true;
+          window.location.href = url;
+        };
 
-    ringoPaymentInProgress = true;
-    var redirected = false;
-    var finish = function(){
-      if (redirected) return;
-      redirected = true;
+        // Keep the current page alive so the browser does not cancel the background
+        // cover/gallery upload after a very fast Stripe or PayPal payment.
+        upload.always(finish);
+        window.setTimeout(finish, 300000);
+        return;
+      }
+      if (Date.now() < deadline) {
+        // The promise may not be assigned to window yet - give it a short grace period
+        // instead of redirecting immediately, which would abandon an upload mid-flight.
+        window.setTimeout(waitForPromise, 50);
+        return;
+      }
+      // No background upload was ever started (e.g. no images selected) - safe to go.
       window.location.href = url;
-    };
-
-    // Keep the current page alive so the browser does not cancel the background
-    // cover/gallery upload after a very fast Stripe or PayPal payment.
-    upload.always(finish);
-    window.setTimeout(finish, 300000);
+    })();
   }
 
   function renderPkgDescBullets(desc){

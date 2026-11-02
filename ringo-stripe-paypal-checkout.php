@@ -3,7 +3,7 @@
  * Plugin Name:  Ringo Stripe + PayPal Checkout
  * Description:  Native boat listing forms with Stripe and PayPal checkout, smart form add-ons,
  *               add-on-only orders for published boats, payment emails, follow-ups, and failure tracking.
- * Version:      9.6.4
+ * Version:      9.6.5
  * Requires PHP: 7.4
  * Author:       Ringo Media
  * Author URI:   https://ringomedia.com/
@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-define( 'RINGO_CHECKOUT_VERSION', '9.6.4' );
+define( 'RINGO_CHECKOUT_VERSION', '9.6.5' );
 define( 'RINGO_CHECKOUT_FILE',    __FILE__ );
 define( 'RINGO_CHECKOUT_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'RINGO_CHECKOUT_URL',     plugin_dir_url( __FILE__ ) );
@@ -40,6 +40,7 @@ require_once RINGO_CHECKOUT_DIR . 'emails/draft-failure.php';
 require_once RINGO_CHECKOUT_DIR . 'frontend/native-forms.php';
 require_once RINGO_CHECKOUT_DIR . 'frontend/enqueue.php';
 require_once RINGO_CHECKOUT_DIR . 'unpaid-boats-cron.php';
+require_once RINGO_CHECKOUT_DIR . 'stuck-assets-cron.php';
 require_once RINGO_CHECKOUT_DIR . 'frontend/ajax-stripe.php';
 require_once RINGO_CHECKOUT_DIR . 'frontend/ajax-paypal.php';
 
