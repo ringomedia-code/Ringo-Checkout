@@ -1,11 +1,13 @@
 <?php
 /**
- * Cron: abandoned-checkout checker.
+ * Cron: abandoned-checkout / payment-failure checker.
  *
- * Runs every 10 minutes. For each boat post that is still 'unpaid' and
- * older than the configured window, it either:
+ * Runs every 10 minutes. For each boat post that is still 'unpaid' or
+ * 'payment_failed' and older than the configured window (abandoned_after,
+ * default 5 minutes), it rechecks directly against the gateway and either:
  *   (a) marks it paid (if Stripe/PayPal reports the payment as completed), or
- *   (b) sends abandoned-checkout follow-up emails to the customer and admin.
+ *   (b) sends the payment-failed follow-up emails to the customer and admin,
+ *       once the failure is confirmed to still be unresolved after the wait.
  *
  * @package RingoCheckout
  */
@@ -55,8 +57,12 @@ function ringo_process_abandoned_checkouts() {
 		'fields'         => 'ids',
 		'meta_query'     => [
 			[
-				'key'   => '_ringo_checkout_status',
-				'value' => 'unpaid',
+				// Also catches card/gateway declines (payment_failed) so a
+				// buyer who never retries still gets followed up on, instead
+				// of silently never being emailed at all.
+				'key'     => '_ringo_checkout_status',
+				'value'   => [ 'unpaid', 'payment_failed' ],
+				'compare' => 'IN',
 			],
 		],
 	] );
@@ -106,11 +112,13 @@ function ringo_process_abandoned_checkouts() {
 				? 'Payment activity stopped before a gateway transaction completed.'
 				: 'The checkout was left before a payment provider completed the transaction.';
 
+			// notify=false: this cron's own payment-failed email (below) is the sole
+			// customer/admin notification now - don't also fire draft-failure's email.
 			ringo_record_draft_failure( $post_id, $condition, $message, [
 				'source'        => 'abandoned_cron',
 				'payment_state' => $state,
-			] );
-			ringo_mark_followed_up( $post_id );
+			], false );
+			ringo_mark_followed_up( $post_id, $condition, $message );
 		}
 	}
 }
@@ -127,19 +135,21 @@ function ringo_cron_handle_stripe( $post_id, $stripe_ready ) {
 	$pi_id = (string) get_post_meta( $post_id, '_ringo_stripe_payment_intent', true );
 
 	if ( ! $pi_id ) {
-		ringo_record_draft_failure( $post_id, 'checkout_abandoned', 'Stripe checkout ended before a PaymentIntent was created.', [
+		$message = 'Stripe checkout ended before a PaymentIntent was created.';
+		ringo_record_draft_failure( $post_id, 'checkout_abandoned', $message, [
 			'source' => 'abandoned_cron_stripe',
-		] );
-		ringo_mark_followed_up( $post_id );
+		], false );
+		ringo_mark_followed_up( $post_id, 'checkout_abandoned', $message );
 		return;
 	}
 
 	if ( ! $stripe_ready ) {
-		ringo_record_draft_failure( $post_id, 'gateway_unavailable', 'Stripe could not be checked by the server.', [
+		$message = 'Stripe could not be checked by the server.';
+		ringo_record_draft_failure( $post_id, 'gateway_unavailable', $message, [
 			'source'            => 'abandoned_cron_stripe',
 			'payment_intent_id' => $pi_id,
-		] );
-		ringo_mark_followed_up( $post_id );
+		], false );
+		ringo_mark_followed_up( $post_id, 'gateway_unavailable', $message );
 		return;
 	}
 
@@ -164,33 +174,44 @@ function ringo_cron_handle_stripe( $post_id, $stripe_ready ) {
 			return;
 		}
 
+		// Stripe's own decline reason (e.g. "Your card was declined.") is far more useful
+		// to a buyer than a generic message, so surface it when the gateway provided one.
+		$decline_reason = (string) ( $intent->last_payment_error->message ?? '' );
+
 		if ( in_array( $status, [ 'processing', 'requires_action', 'requires_confirmation' ], true ) ) {
-			ringo_record_draft_failure( $post_id, 'payment_pending', 'Stripe payment is delayed or pending (status: ' . $status . ').', [
+			$condition = 'payment_pending';
+			$message   = $decline_reason ?: ( 'Stripe payment is delayed or pending (status: ' . $status . ').' );
+			ringo_record_draft_failure( $post_id, $condition, $message, [
 				'source'            => 'abandoned_cron_stripe',
 				'payment_intent_id' => $pi_id,
 				'stripe_status'     => $status,
-			] );
+			], false );
 		} elseif ( 'canceled' === $status ) {
-			ringo_record_draft_failure( $post_id, 'payment_cancelled', 'Stripe PaymentIntent was cancelled.', [
+			$condition = 'payment_cancelled';
+			$message   = $decline_reason ?: 'Stripe PaymentIntent was cancelled.';
+			ringo_record_draft_failure( $post_id, $condition, $message, [
 				'source'            => 'abandoned_cron_stripe',
 				'payment_intent_id' => $pi_id,
-			] );
+			], false );
 		} else {
-			ringo_record_draft_failure( $post_id, 'payment_incomplete', 'Stripe did not complete payment (status: ' . ( $status ?: 'unknown' ) . ').', [
+			$condition = 'payment_incomplete';
+			$message   = $decline_reason ?: ( 'Stripe did not complete payment (status: ' . ( $status ?: 'unknown' ) . ').' );
+			ringo_record_draft_failure( $post_id, $condition, $message, [
 				'source'            => 'abandoned_cron_stripe',
 				'payment_intent_id' => $pi_id,
 				'stripe_status'     => $status,
-			] );
+			], false );
 		}
 	} catch ( \Exception $e ) {
 		$condition = ringo_is_gateway_timeout( $e->getMessage() ) ? 'gateway_timeout' : 'gateway_unavailable';
-		ringo_record_draft_failure( $post_id, $condition, 'Stripe status check failed: ' . $e->getMessage(), [
+		$message   = 'Stripe status check failed: ' . $e->getMessage();
+		ringo_record_draft_failure( $post_id, $condition, $message, [
 			'source'            => 'abandoned_cron_stripe_exception',
 			'payment_intent_id' => $pi_id,
-		] );
+		], false );
 	}
 
-	ringo_mark_followed_up( $post_id );
+	ringo_mark_followed_up( $post_id, $condition ?? 'payment_incomplete', $message ?? '' );
 }
 
 /**
@@ -201,20 +222,22 @@ function ringo_cron_handle_stripe( $post_id, $stripe_ready ) {
 function ringo_cron_handle_paypal( $post_id ) {
 	$order_id = (string) get_post_meta( $post_id, '_ringo_paypal_order_id', true );
 	if ( ! $order_id ) {
-		ringo_record_draft_failure( $post_id, 'checkout_abandoned', 'PayPal checkout ended before an order was created.', [
+		$message = 'PayPal checkout ended before an order was created.';
+		ringo_record_draft_failure( $post_id, 'checkout_abandoned', $message, [
 			'source' => 'abandoned_cron_paypal',
-		] );
-		ringo_mark_followed_up( $post_id );
+		], false );
+		ringo_mark_followed_up( $post_id, 'checkout_abandoned', $message );
 		return;
 	}
 
 	$status = ringo_paypal_get_order_status( $order_id );
 	if ( ! $status ) {
-		ringo_record_draft_failure( $post_id, 'paypal_no_response', 'PayPal did not return an order status.', [
+		$message = 'PayPal did not return an order status.';
+		ringo_record_draft_failure( $post_id, 'paypal_no_response', $message, [
 			'source'   => 'abandoned_cron_paypal_status',
 			'order_id' => $order_id,
-		] );
-		ringo_mark_followed_up( $post_id );
+		], false );
+		ringo_mark_followed_up( $post_id, 'paypal_no_response', $message );
 		return;
 	}
 
@@ -228,11 +251,12 @@ function ringo_cron_handle_paypal( $post_id ) {
 	if ( 'APPROVED' === $status ) {
 		$token = ringo_paypal_get_access_token();
 		if ( ! $token ) {
-			ringo_record_draft_failure( $post_id, 'paypal_no_response', 'PayPal access token failed during delayed capture.', [
+			$message = 'PayPal access token failed during delayed capture.';
+			ringo_record_draft_failure( $post_id, 'paypal_no_response', $message, [
 				'source'   => 'abandoned_cron_paypal_capture',
 				'order_id' => $order_id,
-			] );
-			ringo_mark_followed_up( $post_id );
+			], false );
+			ringo_mark_followed_up( $post_id, 'paypal_no_response', $message );
 			return;
 		}
 
@@ -251,11 +275,12 @@ function ringo_cron_handle_paypal( $post_id ) {
 
 		if ( is_wp_error( $resp ) ) {
 			$condition = ringo_is_gateway_timeout( $resp->get_error_message() ) ? 'gateway_timeout' : 'paypal_no_response';
-			ringo_record_draft_failure( $post_id, $condition, 'PayPal delayed capture failed: ' . $resp->get_error_message(), [
+			$message   = 'PayPal delayed capture failed: ' . $resp->get_error_message();
+			ringo_record_draft_failure( $post_id, $condition, $message, [
 				'source'   => 'abandoned_cron_paypal_capture_http',
 				'order_id' => $order_id,
-			] );
-			ringo_mark_followed_up( $post_id );
+			], false );
+			ringo_mark_followed_up( $post_id, $condition, $message );
 			return;
 		}
 
@@ -272,21 +297,23 @@ function ringo_cron_handle_paypal( $post_id ) {
 			}
 		} elseif ( ! ( $code >= 200 && $code < 300 ) ) {
 			$condition = ringo_is_gateway_timeout( '', $code ) ? 'gateway_timeout' : 'paypal_capture_error';
-			ringo_record_draft_failure( $post_id, $condition, 'PayPal delayed capture returned HTTP ' . $code . '.', [
+			$message   = 'PayPal delayed capture returned HTTP ' . $code . '.';
+			ringo_record_draft_failure( $post_id, $condition, $message, [
 				'source'   => 'abandoned_cron_paypal_capture_response',
 				'order_id' => $order_id,
 				'http_code'=> $code,
-			] );
-			ringo_mark_followed_up( $post_id );
+			], false );
+			ringo_mark_followed_up( $post_id, $condition, $message );
 			return;
 		} else {
-			ringo_record_draft_failure( $post_id, 'payment_pending', 'PayPal capture is still pending.', [
+			$message = 'PayPal capture is still pending.';
+			ringo_record_draft_failure( $post_id, 'payment_pending', $message, [
 				'source'         => 'abandoned_cron_paypal_capture_status',
 				'order_id'       => $order_id,
 				'top_status'     => $top_status,
 				'capture_status' => $cap_status,
-			] );
-			ringo_mark_followed_up( $post_id );
+			], false );
+			ringo_mark_followed_up( $post_id, 'payment_pending', $message );
 			return;
 		}
 	}
@@ -304,38 +331,53 @@ function ringo_cron_handle_paypal( $post_id ) {
 	}
 
 	if ( in_array( $status, [ 'CREATED', 'SAVED', 'PAYER_ACTION_REQUIRED' ], true ) ) {
-		ringo_record_draft_failure( $post_id, 'payment_pending', 'PayPal payment is delayed or awaiting action (status: ' . $status . ').', [
+		$condition = 'payment_pending';
+		$message   = 'PayPal payment is delayed or awaiting action (status: ' . $status . ').';
+		ringo_record_draft_failure( $post_id, $condition, $message, [
 			'source'        => 'abandoned_cron_paypal',
 			'order_id'      => $order_id,
 			'paypal_status' => $status,
-		] );
+		], false );
 	} elseif ( in_array( $status, [ 'VOIDED', 'CANCELLED', 'CANCELED' ], true ) ) {
-		ringo_record_draft_failure( $post_id, 'payment_cancelled', 'PayPal order was cancelled (status: ' . $status . ').', [
+		$condition = 'payment_cancelled';
+		$message   = 'PayPal order was cancelled (status: ' . $status . ').';
+		ringo_record_draft_failure( $post_id, $condition, $message, [
 			'source'        => 'abandoned_cron_paypal',
 			'order_id'      => $order_id,
 			'paypal_status' => $status,
-		] );
+		], false );
 	} else {
-		ringo_record_draft_failure( $post_id, 'payment_incomplete', 'PayPal did not complete payment (status: ' . $status . ').', [
+		$condition = 'payment_incomplete';
+		$message   = 'PayPal did not complete payment (status: ' . $status . ').';
+		ringo_record_draft_failure( $post_id, $condition, $message, [
 			'source'        => 'abandoned_cron_paypal',
 			'order_id'      => $order_id,
 			'paypal_status' => $status,
-		] );
+		], false );
 	}
 
-	ringo_mark_followed_up( $post_id );
+	ringo_mark_followed_up( $post_id, $condition, $message );
 }
 
 // ─── Shared follow-up helper ──────────────────────────────────────────────────
 
 /**
- * Send abandoned emails and mark the post as followed_up.
+ * Send the single payment-failed email pair (one to the customer, one to the
+ * admin) and mark the post as followed_up.
  *
- * @param int $post_id
+ * Runs after a checkout has been rechecked directly against the gateway (Stripe
+ * or PayPal) and confirmed to still not be paid - so this always reflects a
+ * reverified, persistent failure, never an instant/first-attempt decline. This
+ * is the only notification sent for an unresolved checkout - draft-failure's
+ * own email is suppressed (notify=false) at every call site above, and the
+ * separate "new draft" admin email is not sent here.
+ *
+ * @param int    $post_id
+ * @param string $condition     Failure condition code (see ringo_get_draft_failure_label()).
+ * @param string $error_message Human-readable reason the payment never completed.
  */
-function ringo_mark_followed_up( $post_id ) {
-	ringo_send_payment_pending_customer_email( $post_id );
-	ringo_send_payment_pending_admin_email( $post_id );
-	ringo_send_admin_new_draft_email( $post_id );
+function ringo_mark_followed_up( $post_id, $condition, $error_message = '' ) {
+	ringo_send_payment_failed_customer_email( $post_id, $condition, $error_message );
+	ringo_send_payment_failed_admin_email( $post_id, $condition, $error_message );
 	update_post_meta( $post_id, '_ringo_checkout_status', 'followed_up' );
 }

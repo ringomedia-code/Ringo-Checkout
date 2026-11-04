@@ -81,7 +81,20 @@ function ringo_finalize_paid_boat_after_assets( $post_id ) {
 	$package = (string) get_post_meta( $post_id, '_ringo_package', true );
 	$amount  = (float) get_post_meta( $post_id, '_ringo_amount', true );
 	delete_post_meta( $post_id, '_ringo_publish_pending_assets' );
-	return ringo_process_paid( $post_id, $provider ?: 'pending', $provider_id, $package, $amount );
+	$result = ringo_process_paid( $post_id, $provider ?: 'pending', $provider_id, $package, $amount );
+
+	// This can also be reached directly (called inline the moment the last image
+	// finishes uploading) while the 15-second wp_schedule_single_event fallback
+	// below is still pending for the same post. Clear it once we've succeeded so
+	// it doesn't fire a second time and re-run ringo_process_paid().
+	if ( $result ) {
+		$scheduled = wp_next_scheduled( 'ringo_finalize_paid_boat_after_assets', [ $post_id ] );
+		if ( $scheduled ) {
+			wp_unschedule_event( $scheduled, 'ringo_finalize_paid_boat_after_assets', [ $post_id ] );
+		}
+	}
+
+	return $result;
 }
 add_action( 'ringo_finalize_paid_boat_after_assets', 'ringo_finalize_paid_boat_after_assets' );
 
@@ -261,9 +274,15 @@ function ringo_process_paid( $post_id, $provider, $provider_id, $package_name, $
 		delete_post_meta( $post_id, '_ringo_checkout_url' );
 	}
 
-	// Send notification emails.
-	ringo_send_publish_email( $post_id, $package_name, $package_price );
-	ringo_send_admin_listing_email( $post_id, $package_name, $package_price );
+	// This function can legitimately run twice for the same post - once called
+	// directly the instant the last background image finishes uploading, and
+	// once via the wp_schedule_single_event fallback above, if both end up
+	// firing for the same listing. Only send the publish notification once.
+	if ( ! get_post_meta( $post_id, '_ringo_publish_notified_at', true ) ) {
+		update_post_meta( $post_id, '_ringo_publish_notified_at', time() );
+		ringo_send_publish_email( $post_id, $package_name, $package_price );
+		ringo_send_admin_listing_email( $post_id, $package_name, $package_price );
+	}
 
 	return true;
 }

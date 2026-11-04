@@ -4,7 +4,7 @@ A WordPress plugin for [BassBoat4Sale.com](https://bassboat4sale.com) that handl
 
 | | |
 |---|---|
-| **Version** | 9.4.7 |
+| **Version** | 9.7.0 |
 | **Requires PHP** | 7.4 or newer |
 | **Text domain** | `ringo-checkout` |
 | **Author** | [Ringo Media](https://ringomedia.com/) |
@@ -227,6 +227,24 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 ## Changelog
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
+
+### 9.7.0 (2026-11-04)
+
+- **Payment no longer waits on the background photo upload.** Stripe/PayPal payment now runs immediately in parallel with the listing's background cover/gallery upload instead of blocking the Pay button on it. If the upload is still running (or finishes late) once payment succeeds, a non-dismissable "do not close this window" progress popup tracks it until it settles, then redirects. The `ringo_check_stuck_assets` cron remains the safety net if the tab closes anyway. The abandoned-checkout, stuck-payment-watchdog and stuck-photo-upload timers are now independently configurable from the settings page (`admin/settings-page.php`, `includes/settings.php`, `frontend/enqueue.php`, `stuck-assets-cron.php`).
+- **Payment-failure notifications consolidated.** A checkout that never completes (declined card, abandoned before choosing a provider, payment UI stuck in the browser, duplicate PaymentIntent reuse) now sends exactly one customer email and one admin email, with condition-aware subject/body copy (reason + gateway detail, and a "try a different card" section only shown for actual declines). Previously, overlapping draft-failure, payment-pending and "new draft" admin emails could fire for the same checkout. Fixed a related race where a paid listing's publish notification could be sent twice if the finalize step ran both inline and via its scheduled fallback for the same post. Changes in `cron/abandoned.php`, `emails/abandoned.php`, `frontend/ajax-new-features.php`, `frontend/ajax-paypal.php`, `frontend/ajax-stripe.php`, `frontend/thank-you.php`, `includes/payment.php`, `stuck-assets-cron.php` (background upload failures no longer email at all, matching the rest of this consolidation).
+- Cover image is now reliably included in the `gallery` meta on create, async finalize, and edit, since the BassBoat4Sale theme's single-listing slider reads only `gallery` and does not fall back to the featured image (`frontend/native-forms.php`).
+- **Known issue:** under concurrent payment + background upload activity, the cover image can occasionally leak into the gallery list in the wrong position. Not yet fixed — tracked for a follow-up patch.
+- Sites on 9.6.6 will be offered this update.
+
+### 9.6.6 (2026-11-02)
+
+- Block payment until listing photos finish uploading, not just the post-payment redirect.
+- Sites on 9.6.5 will be offered this update.
+
+### 9.6.5 (2026-11-02)
+
+- Fix stuck paid listings when background photo upload is interrupted by redirect.
+- Sites on 9.6.4 will be offered this update.
 
 ### 9.6.4 (2026-10-28)
 

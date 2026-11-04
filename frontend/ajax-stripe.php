@@ -35,7 +35,7 @@ function ringo_ajax_stripe_create_intent() {
 
 	if ( ! $package_label ) {
 		if ( $boat_post_id ) {
-			ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'Stripe package was missing.', [ 'source' => 'stripe_create_intent' ] );
+			ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'Stripe package was missing.', [ 'source' => 'stripe_create_intent' ], false );
 		}
 		wp_send_json_error( [ 'message' => 'Package is required', 'condition' => 'payment_setup_error' ] );
 	}
@@ -64,13 +64,13 @@ function ringo_ajax_stripe_create_intent() {
 	}
 
 	if ( ! ringo_load_stripe_sdk() ) {
-		ringo_record_draft_failure( $boat_post_id, 'gateway_unavailable', 'Stripe library missing.', [ 'source' => 'stripe_create_intent' ] );
+		ringo_record_draft_failure( $boat_post_id, 'gateway_unavailable', 'Stripe library missing.', [ 'source' => 'stripe_create_intent' ], false );
 		wp_send_json_error( [ 'message' => 'Stripe library missing', 'condition' => 'gateway_unavailable' ] );
 	}
 
 	$secret = ringo_get_active_stripe_secret();
 	if ( ! $secret ) {
-		ringo_record_draft_failure( $boat_post_id, 'gateway_unavailable', 'Stripe secret key is not configured.', [ 'source' => 'stripe_create_intent' ] );
+		ringo_record_draft_failure( $boat_post_id, 'gateway_unavailable', 'Stripe secret key is not configured.', [ 'source' => 'stripe_create_intent' ], false );
 		wp_send_json_error( [ 'message' => 'Stripe is not configured. Please contact admin.', 'condition' => 'gateway_unavailable' ] );
 	}
 
@@ -88,7 +88,7 @@ function ringo_ajax_stripe_create_intent() {
 		wp_send_json_success( [ 'free_checkout' => true, 'redirect' => $ringo_free_url ] );
 	}
 	if ( ( $totals['base'] <= 0 && ! ringo_checkout_base_waived( $package_label, $boat_post_id ) ) || $amount <= 0 ) {
-		ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'Stripe checkout total was invalid.', [ 'source' => 'stripe_create_intent', 'package' => $package_label ] );
+		ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'Stripe checkout total was invalid.', [ 'source' => 'stripe_create_intent', 'package' => $package_label ], false );
 		wp_send_json_error( [ 'message' => 'Invalid checkout total', 'condition' => 'payment_setup_error' ] );
 	}
 
@@ -182,7 +182,7 @@ function ringo_ajax_stripe_create_intent() {
 	} catch ( \Exception $e ) {
 		$message   = 'Stripe error: ' . $e->getMessage();
 		$condition = ringo_is_gateway_timeout( $e->getMessage() ) ? 'gateway_timeout' : 'stripe_intent_error';
-		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'stripe_create_intent_exception' ] );
+		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'stripe_create_intent_exception' ], false );
 		wp_send_json_error( [ 'message' => $message, 'condition' => $condition ] );
 	}
 }

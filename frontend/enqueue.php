@@ -84,6 +84,7 @@ function ringo_enqueue_frontend_assets() {
 			'paypalMode'    => (string) ( $pp['mode'] ?? 'sandbox' ),
 			'isAdmin'       => current_user_can( 'administrator' ),
 			'isDealer'      => '' !== ringo_user_dealer_package(),
+			'stuckWatchdogMs' => (int) $settings['stuck_watchdog_after'] * 1000,
 		] ) . ';',
 		'before'
 	);
@@ -144,7 +145,7 @@ jQuery(function($){
   var ringoPaymentStage      = 'idle';
   var ringoLastActivityAt    = Date.now();
   var ringoReportedConditions = {};
-  var RINGO_STUCK_AFTER_MS   = 120000;
+  var RINGO_STUCK_AFTER_MS   = (window.ringoPay && window.ringoPay.stuckWatchdogMs) || 120000;
 
   $(document).on('ringo/native-submit-failed', function(){
     ringoPaymentInProgress = false;
@@ -423,16 +424,59 @@ jQuery(function($){
     return '$' + n.toFixed(2);
   }
 
+  // ── Post-payment "do not close" upload progress popup ───────────────────────
+  // Payment no longer waits on the background photo upload. If it is still
+  // running once payment succeeds, show a non-dismissable popup with a live
+  // progress bar and "photo X of Y" count until it settles, then redirect.
+
+  function showUploadWaitOverlay(doneFiles, totalFiles) {
+    if ($('#ringoUploadWaitOverlay').length) return;
+    var html = '<div id="ringoUploadWaitOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999999;display:flex;align-items:center;justify-content:center;padding:12px;">' +
+      '<div style="width:100%;max-width:420px;background:#fff;border-radius:10px;padding:26px;font-family:Arial;text-align:center;box-sizing:border-box;">' +
+        '<div class="ringo-spinner" style="margin:0 auto 16px;"><div class="ringo-spinner-inner"></div></div>' +
+        '<h3 style="margin:0 0 8px;font-size:17px;color:#111;">Payment complete — uploading your photos</h3>' +
+        '<p id="ringoUploadWaitCount" style="margin:0 0 14px;color:#555;font-size:14px;">Uploading photo ' + doneFiles + ' of ' + totalFiles + '...</p>' +
+        '<div style="background:#eee;border-radius:6px;height:10px;overflow:hidden;">' +
+          '<div id="ringoUploadWaitBar" style="height:100%;width:0%;background:#0a6ebd;transition:width .2s;"></div>' +
+        '</div>' +
+        '<p style="margin:16px 0 0;font-size:12px;color:#d32f2f;font-weight:bold;">⚠️ Do not close or refresh this window until your photos finish uploading.</p>' +
+      '</div>' +
+    '</div>';
+    $('body').append(html);
+  }
+
+  function updateUploadWaitOverlay(doneFiles, totalFiles, percent) {
+    if (!$('#ringoUploadWaitOverlay').length) return;
+    totalFiles = totalFiles || 1;
+    $('#ringoUploadWaitCount').text('Uploading photo ' + Math.min(doneFiles || 0, totalFiles) + ' of ' + totalFiles + '...');
+    $('#ringoUploadWaitBar').css('width', (percent || 0) + '%');
+  }
+
+  function hideUploadWaitOverlay() {
+    $('#ringoUploadWaitOverlay').remove();
+  }
+
+  $(document).on('ringo/native-assets-progress', function(e, data){
+    if (!data) return;
+    updateUploadWaitOverlay(data.doneFiles, data.totalFiles, data.percent);
+  });
+
   function redirectAfterNativeAssets(url) {
     var deadline = Date.now() + 2000; // give the background-upload promise a moment to appear
     (function waitForPromise(){
       var upload = window.ringoNativeAssetUploadPromise;
       if (upload && typeof upload.always === 'function') {
         ringoPaymentInProgress = true;
+
+        if (window.ringoNativeAssetUploadStatus === 'uploading') {
+          showUploadWaitOverlay(window.ringoNativeAssetUploadDoneFiles || 0, window.ringoNativeAssetUploadTotalFiles || 1);
+        }
+
         var redirected = false;
         var finish = function(){
           if (redirected) return;
           redirected = true;
+          hideUploadWaitOverlay();
           window.location.href = url;
         };
 
@@ -1074,26 +1118,13 @@ jQuery(function($){
       });
     }
 
-    // Real users close the browser or tab right after paying (or right after a
-    // decline) - a redirect-timing fix alone cannot protect photos uploading in
-    // the background at that point. Block the actual payment instead, so money
-    // only changes hands once photos are confirmed uploaded (or the seller is
-    // told to retry before paying).
+    // Payment runs immediately and in parallel with the background photo
+    // upload — it no longer blocks the Pay button waiting on it. If the
+    // upload is still running (or finishes late) after payment succeeds,
+    // redirectAfterNativeAssets() shows a do-not-close progress popup and
+    // the ringo_check_stuck_assets cron is the safety net if the tab closes
+    // anyway.
     $('#ringoStripePayBtn').on('click', function(){
-      var upload = window.ringoNativeAssetUploadPromise;
-      if (upload && typeof upload.state === 'function' && upload.state() === 'pending') {
-        $('#ringoStripePayBtn').prop('disabled', true).css('opacity', '0.6');
-        showStripeMsg('Finishing photo upload before payment, please wait...');
-        upload.always(function(){
-          if (window.ringoNativeAssetUploadStatus === 'failed') {
-            $('#ringoStripePayBtn').prop('disabled', true).css('opacity', '0.6');
-            showStripeMsg('Your photos did not finish uploading. Please go back and re-select your images before paying.');
-            return;
-          }
-          attemptStripePayment();
-        });
-        return;
-      }
       if (window.ringoNativeAssetUploadStatus === 'failed') {
         showStripeMsg('Your photos did not finish uploading. Please go back and re-select your images before paying.');
         return;
@@ -1205,26 +1236,16 @@ jQuery(function($){
     }
 
     paypal.Buttons({
-      // Same reasoning as the Stripe Pay button: a real user can close the browser
-      // right after approving (or right after a decline), so block the actual
-      // order/payment until photos are confirmed uploaded, instead of only
-      // delaying the post-payment redirect.
+      // Same reasoning as the Stripe Pay button: order creation runs immediately
+      // in parallel with the background photo upload instead of blocking on it.
+      // redirectAfterNativeAssets() covers the tab-stays-open case after capture,
+      // and ringo_check_stuck_assets is the safety net if the tab closes anyway.
       createOrder: function(){
-        var upload = window.ringoNativeAssetUploadPromise;
-        function proceed(){
-          if (window.ringoNativeAssetUploadStatus === 'failed') {
-            showPPMsg('Your photos did not finish uploading. Please go back and re-select your images before paying.');
-            return $.Deferred().reject().promise();
-          }
-          return beginPaypalOrder();
+        if (window.ringoNativeAssetUploadStatus === 'failed') {
+          showPPMsg('Your photos did not finish uploading. Please go back and re-select your images before paying.');
+          return $.Deferred().reject().promise();
         }
-        if (upload && typeof upload.state === 'function' && upload.state() === 'pending') {
-          showPPMsg('Finishing photo upload before payment, please wait...');
-          var gate = $.Deferred();
-          upload.always(function(){ gate.resolve(); });
-          return gate.promise().then(proceed);
-        }
-        return proceed();
+        return beginPaypalOrder();
       },
 
       onApprove: function(data){

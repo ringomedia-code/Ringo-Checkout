@@ -90,11 +90,11 @@ function ringo_register_settings() {
 		);
 	}
 
-	// Abandoned checkout section.
+	// Abandoned checkout / stuck-checkout timing section.
 	add_settings_section(
 		'ringo_abandoned',
-		'Abandoned Checkout Follow-up',
-		function () { echo '<p>Seconds after checkout creation before sending follow-up emails.</p>'; },
+		'Checkout Timing',
+		function () { echo '<p>Controls how long to wait before treating a checkout as abandoned or stuck. All values are in seconds.</p>'; },
 		'ringo-stripe-checkout'
 	);
 
@@ -102,6 +102,22 @@ function ringo_register_settings() {
 		'ringo_abandoned_after',
 		'Abandoned after (seconds)',
 		'ringo_field_abandoned_after',
+		'ringo-stripe-checkout',
+		'ringo_abandoned'
+	);
+
+	add_settings_field(
+		'ringo_stuck_watchdog_after',
+		'Payment watchdog "stuck" after (seconds)',
+		'ringo_field_stuck_watchdog_after',
+		'ringo-stripe-checkout',
+		'ringo_abandoned'
+	);
+
+	add_settings_field(
+		'ringo_stuck_assets_after',
+		'Stuck photo upload after (seconds)',
+		'ringo_field_stuck_assets_after',
 		'ringo-stripe-checkout',
 		'ringo_abandoned'
 	);
@@ -221,7 +237,25 @@ function ringo_field_abandoned_after() {
 		'<input type="number" min="0" name="ringo_stripe_settings[abandoned_after]" value="%s" />',
 		esc_attr( (int) $s['abandoned_after'] )
 	);
-	echo '<p class="description">Example: 60 = 1 minute.</p>';
+	echo '<p class="description">Example: 60 = 1 minute. How old an unpaid draft must be before the abandoned-checkout cron sends follow-up emails.</p>';
+}
+
+function ringo_field_stuck_watchdog_after() {
+	$s = ringo_get_settings();
+	printf(
+		'<input type="number" min="30" name="ringo_stripe_settings[stuck_watchdog_after]" value="%s" />',
+		esc_attr( (int) $s['stuck_watchdog_after'] )
+	);
+	echo '<p class="description">Example: 120 = 2 minutes. How long the payment-method screen can sit idle in the buyer\'s browser before it is reported as stuck.</p>';
+}
+
+function ringo_field_stuck_assets_after() {
+	$s = ringo_get_settings();
+	printf(
+		'<input type="number" min="60" name="ringo_stripe_settings[stuck_assets_after]" value="%s" />',
+		esc_attr( (int) $s['stuck_assets_after'] )
+	);
+	echo '<p class="description">Example: 600 = 10 minutes. How long a paid listing\'s background photo upload can run before it is flagged and the seller is asked to re-upload.</p>';
 }
 
 // ─── Page renderer ───────────────────────────────────────────────────────────

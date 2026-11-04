@@ -137,8 +137,11 @@ function ringo_ajax_mark_payment_failed() {
 	update_post_meta( $boat_post_id, '_ringo_payment_failed_time', current_time( 'timestamp' ) );
 	update_post_meta( $boat_post_id, '_ringo_payment_intent_id', $payment_intent_id );
 
-	// Send the dedicated draft-failure notification. This is independent from
-	// the boat follow-up email sequence.
+	// Record the failure, but don't email instantly — card declines are
+	// routinely retried within seconds. Leave notification to the abandoned-
+	// checkout cron (ringo_check_abandoned_checkouts), which re-verifies the
+	// PaymentIntent with Stripe directly and only emails if still unresolved
+	// after the configured abandoned_after window.
 	ringo_record_draft_failure(
 		$boat_post_id,
 		$condition ?: 'card_rejected',
@@ -146,7 +149,8 @@ function ringo_ajax_mark_payment_failed() {
 		[
 			'source'            => 'ajax_mark_payment_failed',
 			'payment_intent_id' => $payment_intent_id,
-		]
+		],
+		false
 	);
 
 	ringo_log( 'Payment marked as failed', [
@@ -321,6 +325,12 @@ function ringo_ajax_report_payment_failure() {
 		update_post_meta( $post_id, '_ringo_payment_provider', $provider );
 	}
 
+	// notify=false: this is an instant, best-effort client-side report (fires the
+	// moment the browser's own watchdog times out, seconds after the attempt
+	// started). The abandoned-checkout cron re-verifies after the configured wait
+	// and is the only thing that sends the consolidated payment-failed email pair -
+	// otherwise this would double up with it, exactly like the old immediate-decline
+	// email did before that was fixed.
 	$recorded = ringo_record_draft_failure(
 		$post_id,
 		$condition,
@@ -329,7 +339,8 @@ function ringo_ajax_report_payment_failure() {
 			'source'   => 'browser_failure_report',
 			'provider' => $provider,
 			'stage'    => $stage,
-		]
+		],
+		false
 	);
 
 	if ( ! $recorded ) {

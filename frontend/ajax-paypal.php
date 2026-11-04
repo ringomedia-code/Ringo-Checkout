@@ -35,7 +35,7 @@ function ringo_ajax_paypal_create_order() {
 
 	if ( ! $package_label ) {
 		if ( $boat_post_id ) {
-			ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'PayPal package was missing.', [ 'source' => 'paypal_create_order' ] );
+			ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'PayPal package was missing.', [ 'source' => 'paypal_create_order' ], false );
 		}
 		wp_send_json_error( [ 'message' => 'Package is required', 'condition' => 'payment_setup_error' ] );
 	}
@@ -74,7 +74,7 @@ function ringo_ajax_paypal_create_order() {
 		wp_send_json_success( [ 'free_checkout' => true, 'redirect' => $ringo_free_url ] );
 	}
 	if ( ( $totals['base'] <= 0 && ! ringo_checkout_base_waived( $package_label, $boat_post_id ) ) || $amount <= 0 ) {
-		ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'PayPal checkout total was invalid.', [ 'source' => 'paypal_create_order', 'package' => $package_label ] );
+		ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'PayPal checkout total was invalid.', [ 'source' => 'paypal_create_order', 'package' => $package_label ], false );
 		wp_send_json_error( [ 'message' => 'Invalid checkout total', 'condition' => 'payment_setup_error' ] );
 	}
 
@@ -115,7 +115,7 @@ function ringo_ajax_paypal_create_order() {
 
 	$token = ringo_paypal_get_access_token();
 	if ( ! $token ) {
-		ringo_record_draft_failure( $boat_post_id, 'paypal_no_response', 'PayPal access token request did not return a token.', [ 'source' => 'paypal_create_order' ] );
+		ringo_record_draft_failure( $boat_post_id, 'paypal_no_response', 'PayPal access token request did not return a token.', [ 'source' => 'paypal_create_order' ], false );
 		wp_send_json_error( [ 'message' => 'PayPal is not configured or did not respond. Please contact admin.', 'condition' => 'paypal_no_response' ] );
 	}
 
@@ -164,7 +164,7 @@ function ringo_ajax_paypal_create_order() {
 	if ( is_wp_error( $resp ) ) {
 		$message   = 'PayPal error: ' . $resp->get_error_message();
 		$condition = ringo_is_gateway_timeout( $resp->get_error_message() ) ? 'gateway_timeout' : 'paypal_no_response';
-		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'paypal_create_order_http' ] );
+		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'paypal_create_order_http' ], false );
 		wp_send_json_error( [ 'message' => $message, 'condition' => $condition ] );
 	}
 
@@ -174,7 +174,7 @@ function ringo_ajax_paypal_create_order() {
 	if ( ! ( $code >= 200 && $code < 300 ) || empty( $body['id'] ) ) {
 		$message   = 'PayPal error: could not create order (HTTP ' . $code . ')';
 		$condition = ringo_is_gateway_timeout( '', $code ) ? 'gateway_timeout' : 'paypal_order_error';
-		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'paypal_create_order_response', 'http_code' => $code, 'paypal_status' => (string) ( $body['status'] ?? '' ) ] );
+		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'paypal_create_order_response', 'http_code' => $code, 'paypal_status' => (string) ( $body['status'] ?? '' ) ], false );
 		wp_send_json_error( [ 'message' => $message, 'condition' => $condition ] );
 	}
 
@@ -229,7 +229,7 @@ function ringo_ajax_paypal_capture_order() {
 
 	if ( ! $order_id ) {
 		if ( $boat_post_id ) {
-			ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'PayPal capture was called without an order ID.', [ 'source' => 'paypal_capture_order' ] );
+			ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'PayPal capture was called without an order ID.', [ 'source' => 'paypal_capture_order' ], false );
 		}
 		wp_send_json_error( [ 'message' => 'Missing order ID', 'condition' => 'payment_setup_error' ] );
 	}
@@ -252,7 +252,7 @@ function ringo_ajax_paypal_capture_order() {
 	// SECURITY: the order being captured must be the one created for THIS boat, so a
 	// paid order from another listing cannot be replayed here.
 	if ( (string) get_post_meta( $boat_post_id, '_ringo_paypal_order_id', true ) !== $order_id ) {
-		ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'PayPal order does not belong to this listing.', [ 'source' => 'paypal_capture_order_mismatch', 'order_id' => $order_id ] );
+		ringo_record_draft_failure( $boat_post_id, 'payment_setup_error', 'PayPal order does not belong to this listing.', [ 'source' => 'paypal_capture_order_mismatch', 'order_id' => $order_id ], false );
 		wp_send_json_error( [ 'message' => 'This PayPal order does not belong to this listing.', 'condition' => 'payment_setup_error' ], 403 );
 	}
 
@@ -260,7 +260,7 @@ function ringo_ajax_paypal_capture_order() {
 
 	$token = ringo_paypal_get_access_token();
 	if ( ! $token ) {
-		ringo_record_draft_failure( $boat_post_id, 'paypal_no_response', 'PayPal access token request failed before capture.', [ 'source' => 'paypal_capture_order', 'order_id' => $order_id ] );
+		ringo_record_draft_failure( $boat_post_id, 'paypal_no_response', 'PayPal access token request failed before capture.', [ 'source' => 'paypal_capture_order', 'order_id' => $order_id ], false );
 		wp_send_json_error( [ 'message' => 'PayPal is not configured or did not respond. Please contact admin.', 'condition' => 'paypal_no_response' ] );
 	}
 
@@ -281,7 +281,7 @@ function ringo_ajax_paypal_capture_order() {
 	if ( is_wp_error( $resp ) ) {
 		$message   = 'PayPal capture error: ' . $resp->get_error_message();
 		$condition = ringo_is_gateway_timeout( $resp->get_error_message() ) ? 'gateway_timeout' : 'paypal_no_response';
-		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'paypal_capture_http', 'order_id' => $order_id ] );
+		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'paypal_capture_http', 'order_id' => $order_id ], false );
 		wp_send_json_error( [ 'message' => $message, 'condition' => $condition ] );
 	}
 
@@ -291,7 +291,7 @@ function ringo_ajax_paypal_capture_order() {
 	if ( ! ( $code >= 200 && $code < 300 ) ) {
 		$message   = 'PayPal capture failed (HTTP ' . $code . ')';
 		$condition = ringo_is_gateway_timeout( '', $code ) ? 'gateway_timeout' : 'paypal_capture_error';
-		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'paypal_capture_response', 'order_id' => $order_id, 'http_code' => $code ] );
+		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'paypal_capture_response', 'order_id' => $order_id, 'http_code' => $code ], false );
 		wp_send_json_error( [ 'message' => $message, 'condition' => $condition ] );
 	}
 
@@ -304,7 +304,7 @@ function ringo_ajax_paypal_capture_order() {
 		$message      = 'Payment not completed (status: ' . $status_value . ')';
 		$pending      = in_array( strtoupper( $status_value ), [ 'PENDING', 'APPROVED', 'CREATED', 'PAYER_ACTION_REQUIRED' ], true );
 		$condition    = $pending ? 'payment_pending' : 'paypal_capture_error';
-		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'paypal_capture_status', 'order_id' => $order_id, 'top_status' => $top_status, 'capture_status' => $cap_status ] );
+		ringo_record_draft_failure( $boat_post_id, $condition, $message, [ 'source' => 'paypal_capture_status', 'order_id' => $order_id, 'top_status' => $top_status, 'capture_status' => $cap_status ], false );
 		wp_send_json_error( [ 'message' => $message, 'condition' => $condition ] );
 	}
 

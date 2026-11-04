@@ -45,7 +45,9 @@ function ringo_default_settings() {
 			'pro'      => 'BASS Elite, MLF Tour, NPFL · 25 photos · Up to 2 YouTube videos · Social media package · Rotating top of site · Rotating cover photos · PRO page and Instagram highlights',
 		],
 
-		'abandoned_after' => 360, // seconds (6 minutes)
+		'abandoned_after'      => 300, // seconds (5 minutes) - checkout age before follow-up emails
+		'stuck_watchdog_after' => 300, // seconds (5 minutes) - browser "payment not advancing" watchdog
+		'stuck_assets_after'   => 300, // seconds (5 minutes) - paid listing's background photo upload considered stuck
 	];
 }
 
@@ -74,7 +76,9 @@ function ringo_get_settings() {
 
 	$merged['mode']           = ( $merged['mode'] === 'live' ) ? 'live' : 'test';
 	$merged['paypal_mode']    = ( $merged['paypal_mode'] === 'live' ) ? 'live' : 'sandbox';
-	$merged['abandoned_after'] = max( 0, (int) ( $merged['abandoned_after'] ?? $defaults['abandoned_after'] ) );
+	$merged['abandoned_after']      = max( 0, (int) ( $merged['abandoned_after'] ?? $defaults['abandoned_after'] ) );
+	$merged['stuck_watchdog_after'] = max( 30, (int) ( $merged['stuck_watchdog_after'] ?? $defaults['stuck_watchdog_after'] ) );
+	$merged['stuck_assets_after']   = max( 60, (int) ( $merged['stuck_assets_after'] ?? $defaults['stuck_assets_after'] ) );
 
 	return $merged;
 }
@@ -126,6 +130,14 @@ function ringo_sanitize_settings( $input ) {
 	$out['abandoned_after'] = isset( $input['abandoned_after'] )
 		? max( 0, (int) $input['abandoned_after'] )
 		: $defaults['abandoned_after'];
+
+	$out['stuck_watchdog_after'] = isset( $input['stuck_watchdog_after'] )
+		? max( 30, (int) $input['stuck_watchdog_after'] )
+		: $defaults['stuck_watchdog_after'];
+
+	$out['stuck_assets_after'] = isset( $input['stuck_assets_after'] )
+		? max( 60, (int) $input['stuck_assets_after'] )
+		: $defaults['stuck_assets_after'];
 
 	return $out;
 }

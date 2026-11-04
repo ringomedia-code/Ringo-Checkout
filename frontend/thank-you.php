@@ -80,7 +80,7 @@ function ringo_thank_you_stripe() {
 		if ( $post_id ) {
 			ringo_record_draft_failure( $post_id, 'stripe_payment_incomplete', 'Stripe returned without a PaymentIntent identifier.', [
 				'source' => 'stripe_thank_you_missing_intent',
-			] );
+			], false );
 		}
 		return;
 	}
@@ -94,7 +94,7 @@ function ringo_thank_you_stripe() {
 			ringo_record_draft_failure( $post_id, 'gateway_unavailable', 'Stripe SDK was unavailable on the thank-you safety check.', [
 				'source'            => 'stripe_thank_you_sdk',
 				'payment_intent_id' => $pi_id,
-			] );
+			], false );
 		}
 		return;
 	}
@@ -105,7 +105,7 @@ function ringo_thank_you_stripe() {
 			ringo_record_draft_failure( $post_id, 'payment_setup_error', 'Stripe credentials were unavailable on the thank-you safety check.', [
 				'source'            => 'stripe_thank_you_credentials',
 				'payment_intent_id' => $pi_id,
-			] );
+			], false );
 		}
 		return;
 	}
@@ -155,7 +155,7 @@ function ringo_thank_you_stripe() {
 					'source'            => 'stripe_thank_you_status',
 					'payment_intent_id' => $pi_id,
 					'stripe_status'     => $status,
-				] );
+				], false );
 			}
 			return;
 		}
@@ -193,7 +193,7 @@ function ringo_thank_you_stripe() {
 			ringo_record_draft_failure( $post_id, $condition, 'Stripe thank-you status check failed: ' . $e->getMessage(), [
 				'source'            => 'stripe_thank_you_exception',
 				'payment_intent_id' => $pi_id,
-			] );
+			], false );
 		} else {
 			ringo_log( 'Stripe thank-you error', $e->getMessage() );
 		}
@@ -228,7 +228,7 @@ function ringo_thank_you_paypal() {
 		if ( $boat_post_id ) {
 			ringo_record_draft_failure( $boat_post_id, 'paypal_no_response', 'PayPal returned without an order identifier.', [
 				'source' => 'paypal_thank_you_missing_order',
-			] );
+			], false );
 		}
 		return;
 	}
@@ -262,7 +262,7 @@ function ringo_thank_you_paypal() {
 		ringo_record_draft_failure( $boat_post_id, 'paypal_no_response', 'PayPal access token request failed on the thank-you safety check.', [
 			'source'   => 'paypal_thank_you_token',
 			'order_id' => $order_id,
-		] );
+		], false );
 		return;
 	}
 
@@ -285,7 +285,7 @@ function ringo_thank_you_paypal() {
 		ringo_record_draft_failure( $boat_post_id, $condition, 'PayPal order status check failed: ' . $message, [
 			'source'   => 'paypal_thank_you_status_http',
 			'order_id' => $order_id,
-		] );
+		], false );
 		return;
 	}
 
@@ -302,7 +302,7 @@ function ringo_thank_you_paypal() {
 			'source'    => 'paypal_thank_you_status_response',
 			'order_id'  => $order_id,
 			'http_code' => $code,
-		] );
+		], false );
 		return;
 	}
 
@@ -325,7 +325,7 @@ function ringo_thank_you_paypal() {
 			'source'        => 'paypal_thank_you_status',
 			'order_id'      => $order_id,
 			'paypal_status' => $status,
-		] );
+		], false );
 	}
 }
 
@@ -357,7 +357,7 @@ function ringo_paypal_capture_and_process( $boat_post_id, $order_id, $credential
 		ringo_record_draft_failure( $boat_post_id, $condition, 'PayPal capture failed: ' . $message, [
 			'source'   => 'paypal_thank_you_capture_http',
 			'order_id' => $order_id,
-		] );
+		], false );
 		return;
 	}
 
@@ -373,7 +373,7 @@ function ringo_paypal_capture_and_process( $boat_post_id, $order_id, $credential
 			'source'    => 'paypal_thank_you_capture_response',
 			'order_id'  => $order_id,
 			'http_code' => $code,
-		] );
+		], false );
 		return;
 	}
 
@@ -390,7 +390,7 @@ function ringo_paypal_capture_and_process( $boat_post_id, $order_id, $credential
 			'order_id'       => $order_id,
 			'top_status'     => $top_status,
 			'capture_status' => $cap_status,
-		] );
+		], false );
 		return;
 	}
 

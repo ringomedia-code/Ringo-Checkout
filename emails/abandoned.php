@@ -299,17 +299,72 @@ function ringo_send_admin_new_draft_email( $post_id ) {
 	return $sent;
 }
 
+// ─── Payment Failed: condition → copy ──────────────────────────────────────────
+
+/**
+ * Group a failure condition code into a broad category and return a tailored
+ * opening sentence for the customer email. Different conditions mean very
+ * different things happened (a decline is not the same as an abandoned
+ * checkout or a gateway timeout), so the copy must not always say "declined".
+ *
+ * @param string $condition Condition code (see ringo_get_draft_failure_label()).
+ * @return array{group:string,intro:string}
+ */
+function ringo_get_payment_failed_copy( $condition ) {
+	$groups = [
+		'card_rejected'             => 'declined',
+		'payment_incomplete'        => 'declined',
+		'stripe_payment_incomplete' => 'declined',
+		'paypal_order_error'        => 'declined',
+		'paypal_capture_error'      => 'declined',
+		'payment_cancelled'         => 'cancelled',
+		'checkout_abandoned'        => 'abandoned',
+		'payment_snippet_stuck'     => 'abandoned',
+		'payment_setup_error'       => 'abandoned',
+		'payment_pending'           => 'pending',
+		'gateway_timeout'           => 'gateway',
+		'gateway_unavailable'       => 'gateway',
+		'paypal_no_response'        => 'gateway',
+		'stripe_intent_error'       => 'gateway',
+		'stripe_confirmation_error' => 'gateway',
+		'paypal_sdk_error'          => 'gateway',
+	];
+
+	$intros = [
+		'declined'  => 'We attempted to process your payment for your boat listing, but it was not successful.',
+		'cancelled' => 'Your payment for your boat listing was cancelled before it could be completed.',
+		'abandoned' => 'Your boat listing checkout was started, but the payment was never completed.',
+		'pending'   => 'Your payment for your boat listing has been pending longer than expected and has not gone through.',
+		'gateway'   => 'We were unable to confirm your payment for your boat listing due to a temporary issue with our payment processor.',
+	];
+
+	$group = $groups[ sanitize_key( (string) $condition ) ] ?? 'declined';
+
+	return [
+		'group' => $group,
+		'intro' => $intros[ $group ],
+	];
+}
+
 // ─── Payment Failed Customer Email ────────────────────────────────────────────
 
 /**
- * Send email to customer when their payment fails.
- * Triggered immediately when card is declined or other payment errors occur.
+ * Send email to customer once a payment failure is confirmed to persist.
+ *
+ * Not triggered immediately on a decline - the abandoned-checkout cron waits
+ * for the configured window (abandoned_after, default 5 minutes) and rechecks
+ * directly against the gateway first, since buyers routinely retry a declined
+ * card within seconds. Only sent once that recheck still finds no payment.
+ *
+ * This is the sole customer notification for an unresolved checkout - the
+ * generic draft-failure email is suppressed for this path (see cron/abandoned.php).
  *
  * @param  int    $post_id
- * @param  string $error_message The specific payment error
+ * @param  string $condition     Failure condition code.
+ * @param  string $error_message The specific payment error/reason text.
  * @return bool
  */
-function ringo_send_payment_failed_customer_email( $post_id, $error_message = '' ) {
+function ringo_send_payment_failed_customer_email( $post_id, $condition = '', $error_message = '' ) {
 	$to = ringo_get_form_email( $post_id );
 	if ( ! $to ) {
 		ringo_log( 'Payment failed customer email: no email address found, skipping', $post_id );
@@ -322,10 +377,12 @@ function ringo_send_payment_failed_customer_email( $post_id, $error_message = ''
 		return true;
 	}
 
-	$subject   = 'Your payment could not be processed';
-	$title     = esc_html( get_the_title( $post_id ) );
-	$draft_url = esc_url( ringo_get_draft_edit_url( $post_id ) );
-	$error_msg = $error_message ? esc_html( $error_message ) : 'Your card could not be processed. This might be due to insufficient funds, a card issue, or a temporary problem with your bank.';
+	$subject     = 'Your payment could not be processed';
+	$title       = esc_html( get_the_title( $post_id ) );
+	$draft_url   = esc_url( ringo_get_draft_edit_url( $post_id ) );
+	$reason_label= esc_html( ringo_get_draft_failure_label( $condition ) );
+	$copy        = ringo_get_payment_failed_copy( $condition );
+	$error_msg   = $error_message ? esc_html( $error_message ) : 'No further detail was provided by the payment processor.';
 
 	ob_start();
 	?>
@@ -335,25 +392,28 @@ function ringo_send_payment_failed_customer_email( $post_id, $error_message = ''
   <div style="max-width:600px;margin:0 auto;background:#fff;border:1px solid #e0e0e0;padding:20px;border-radius:5px;">
     <h2 style="color:#d32f2f;">Payment Could Not Be Processed</h2>
     <p>Hi,</p>
-    <p>We attempted to process your payment for your boat listing, but it was declined.</p>
-    
+    <p><?php echo esc_html( $copy['intro'] ); ?></p>
+
     <div style="background:#fff3cd;border:1px solid #ffeeba;border-radius:5px;padding:12px;margin:15px 0;color:#856404;">
-      <strong>Error:</strong> <?php echo $error_msg; ?>
+      <strong>Reason:</strong> <?php echo $reason_label; ?><br>
+      <strong>Detail:</strong> <?php echo $error_msg; ?>
     </div>
 
     <p><strong>Listing:</strong> <?php echo $title; ?></p>
-    
+
+    <?php if ( 'declined' === $copy['group'] ) : ?>
     <p>Please try again with:</p>
     <ul style="margin:10px 0;padding-left:20px;">
       <li>A different payment method</li>
       <li>A different card</li>
       <li>Contact your bank if you believe this is an error</li>
     </ul>
+    <?php endif; ?>
 
     <p>
       <a href="<?php echo $draft_url; ?>"
          style="display:inline-block;padding:10px 18px;background:#0a6ebd;color:#fff;text-decoration:none;border-radius:3px;">
-        Try Payment Again
+        Resume Checkout
       </a>
     </p>
 
@@ -393,13 +453,15 @@ function ringo_send_payment_failed_customer_email( $post_id, $error_message = ''
 // ─── Payment Failed Admin Email ───────────────────────────────────────────────
 
 /**
- * Notify admin when a payment fails.
+ * Notify admin when a payment fails. Sole admin notification for an
+ * unresolved checkout (see ringo_send_payment_failed_customer_email()).
  *
  * @param  int    $post_id
- * @param  string $error_message The specific payment error
+ * @param  string $condition     Failure condition code.
+ * @param  string $error_message The specific payment error/reason text.
  * @return bool
  */
-function ringo_send_payment_failed_admin_email( $post_id, $error_message = '' ) {
+function ringo_send_payment_failed_admin_email( $post_id, $condition = '', $error_message = '' ) {
 	$to = get_option( 'admin_email' );
 
 	if ( get_post_meta( $post_id, '_ringo_payment_failed_admin_email_sent', true ) ) {
@@ -407,12 +469,13 @@ function ringo_send_payment_failed_admin_email( $post_id, $error_message = '' ) 
 		return true;
 	}
 
-	$subject    = 'Payment Failed – Boat Listing Still in Draft';
-	$title      = sanitize_text_field( get_the_title( $post_id ) );
-	$user_email = ringo_get_form_email( $post_id );
-	$provider   = (string) get_post_meta( $post_id, '_ringo_payment_provider', true );
-	$draft_url  = esc_url( ringo_get_draft_edit_url( $post_id ) );
-	$error_msg  = $error_message ? esc_html( $error_message ) : 'Unknown error';
+	$subject     = 'Payment Failed – Boat Listing Still in Draft';
+	$title       = sanitize_text_field( get_the_title( $post_id ) );
+	$user_email  = ringo_get_form_email( $post_id );
+	$provider    = (string) get_post_meta( $post_id, '_ringo_payment_provider', true );
+	$draft_url   = esc_url( ringo_get_draft_edit_url( $post_id ) );
+	$reason_label= esc_html( ringo_get_draft_failure_label( $condition ) );
+	$error_msg   = $error_message ? esc_html( $error_message ) : 'No further detail was provided by the payment processor.';
 
 	ob_start();
 	?>
@@ -421,8 +484,8 @@ function ringo_send_payment_failed_admin_email( $post_id, $error_message = '' ) 
 <body style="font-family:Arial,sans-serif;background:#f6f6f6;padding:20px;">
   <div style="max-width:600px;margin:0 auto;background:#fff;border:1px solid #e0e0e0;padding:20px;border-radius:5px;">
     <h2 style="color:#d32f2f;">Payment Failed – Listing Still in Draft</h2>
-    <p>A user's payment was rejected. The listing remains in draft status.</p>
-    
+    <p>A buyer's checkout did not result in a completed payment. The listing remains in draft status.</p>
+
     <table style="width:100%;border-collapse:collapse;margin-top:10px;">
       <tr>
         <td style="padding:8px 10px;border-bottom:1px solid #eee;"><strong>Boat Title</strong></td>
@@ -441,7 +504,11 @@ function ringo_send_payment_failed_admin_email( $post_id, $error_message = '' ) 
         <td style="padding:8px 10px;border-bottom:1px solid #eee;"><?php echo esc_html( $provider ?: '—' ); ?></td>
       </tr>
       <tr>
-        <td style="padding:8px 10px;border-bottom:1px solid #eee;"><strong>Error</strong></td>
+        <td style="padding:8px 10px;border-bottom:1px solid #eee;"><strong>Reason</strong></td>
+        <td style="padding:8px 10px;border-bottom:1px solid #eee;"><?php echo $reason_label; ?></td>
+      </tr>
+      <tr>
+        <td style="padding:8px 10px;border-bottom:1px solid #eee;"><strong>Detail</strong></td>
         <td style="padding:8px 10px;border-bottom:1px solid #eee;background:#fff3cd;"><?php echo $error_msg; ?></td>
       </tr>
       <tr>
@@ -449,9 +516,9 @@ function ringo_send_payment_failed_admin_email( $post_id, $error_message = '' ) 
         <td style="padding:8px 10px;border-bottom:1px solid #eee;"><a href="<?php echo $draft_url; ?>"><?php echo esc_html( $draft_url ); ?></a></td>
       </tr>
     </table>
-    
+
     <p style="margin-top:15px;font-size:12px;color:#888;">
-      This is an automatic notification. The customer has been notified of the payment failure.
+      This is an automatic notification. The customer has been notified.
       &copy; 2026 BassBoat4Sale. All rights reserved.
     </p>
   </div>
