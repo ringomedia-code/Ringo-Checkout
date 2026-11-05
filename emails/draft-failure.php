@@ -228,7 +228,7 @@ function ringo_send_draft_failure_notification_email( $post_id, $condition, $mes
 
 	$recipients = ringo_get_draft_failure_recipients( $post_id );
 	if ( empty( $recipients ) ) {
-		ringo_log( 'Draft failure notification: no recipients', [ 'post_id' => $post_id ] );
+		ringo_log_email( 'Draft failure notification: no recipients', [ 'post_id' => $post_id ] );
 		return false;
 	}
 
@@ -248,7 +248,7 @@ function ringo_send_draft_failure_notification_email( $post_id, $condition, $mes
 		$sent_attempts = is_array( $sent_attempts ) ? $sent_attempts : [];
 
 		if ( in_array( $attempt_id, $sent_attempts, true ) ) {
-			ringo_log( 'Draft failure notification: already sent for attempt', [
+			ringo_log_email( 'Draft failure notification: already sent for attempt', [
 				'post_id'    => $post_id,
 				'attempt_id' => $attempt_id,
 				'role'       => $role,
@@ -400,7 +400,7 @@ function ringo_record_draft_failure( $post_id, $condition, $message = '', $conte
 
 	$lock_key = 'ringo_draft_failure_' . $post_id . '_' . md5( $attempt_id );
 	if ( get_transient( $lock_key ) ) {
-		ringo_log( 'Draft failure notification locked by another request', [ 'post_id' => $post_id, 'attempt_id' => $attempt_id ] );
+		ringo_log_email( 'Draft failure notification locked by another request', [ 'post_id' => $post_id, 'attempt_id' => $attempt_id ] );
 		return true;
 	}
 

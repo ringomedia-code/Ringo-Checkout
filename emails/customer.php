@@ -23,12 +23,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 function ringo_send_publish_email( $post_id, $package_name, $package_price ) {
 	$to = ringo_get_form_email( $post_id );
 	if ( ! $to ) {
-		ringo_log( 'Customer email: missing recipient', [ 'post_id' => $post_id ] );
+		ringo_log_email( 'Customer email: missing recipient', [ 'post_id' => $post_id ] );
 		return false;
 	}
 
 	if ( get_post_meta( $post_id, '_ringo_publish_email_sent', true ) ) {
-		ringo_log( 'Customer email: already sent, skipping', $post_id );
+		ringo_log_email( 'Customer email: already sent, skipping', $post_id );
 		return true;
 	}
 
@@ -108,7 +108,7 @@ function ringo_send_publish_email( $post_id, $package_name, $package_price ) {
 
 	$sent = wp_mail( $to, $subject, $html, $headers );
 
-	ringo_log( 'Customer email: wp_mail result', [
+	ringo_log_email( 'Customer email: wp_mail result', [
 		'sent'    => (bool) $sent,
 		'to'      => $to,
 		'post_id' => $post_id,
@@ -169,7 +169,7 @@ function ringo_send_customer_edit_email( $post_id ) {
 	];
 
 	$sent = wp_mail( $to, 'Your Listing Was Updated', $body, $headers );
-	ringo_log( 'Native edit seller email', [ 'post_id' => $post_id, 'sent' => (bool) $sent, 'recipient' => $to ] );
+	ringo_log_email( 'Native edit seller email', [ 'post_id' => $post_id, 'sent' => (bool) $sent, 'recipient' => $to ] );
 
 	return (bool) $sent;
 }

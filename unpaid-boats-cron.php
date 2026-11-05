@@ -86,7 +86,7 @@ function ringo_check_unpaid_boats_handler() {
 		$email_sent = get_post_meta( $post_id, '_ringo_unpaid_email_sent', true );
 		
 		if ( $email_sent ) {
-			ringo_log( 'Unpaid email already sent for boat ' . $post_id, $post_id );
+			ringo_log_email( 'Unpaid email already sent for boat ' . $post_id, $post_id );
 			continue;
 		}
 
@@ -118,7 +118,7 @@ function ringo_send_unpaid_boat_customer_email( $post_id ) {
 	$to = ringo_get_form_email( $post_id );
 	
 	if ( ! $to ) {
-		ringo_log( 'Unpaid boat customer email: no email found', $post_id );
+		ringo_log_email( 'Unpaid boat customer email: no email found', $post_id );
 		return false;
 	}
 
