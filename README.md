@@ -4,7 +4,7 @@ A WordPress plugin for [BassBoat4Sale.com](https://bassboat4sale.com) that handl
 
 | | |
 |---|---|
-| **Version** | 9.7.0 |
+| **Version** | 9.7.1 |
 | **Requires PHP** | 7.4 or newer |
 | **Text domain** | `ringo-checkout` |
 | **Author** | [Ringo Media](https://ringomedia.com/) |
@@ -227,6 +227,11 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 ## Changelog
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
+
+### 9.7.1 (2026-11-05)
+
+- **Fixed: re-uploading photos on an existing unpaid draft could time out before the payment screen ever appeared.** The edit/re-upload form (the page a seller lands on via their checkout link) bundled every gallery photo into one synchronous request before showing Stripe/PayPal - with ~18+ photos on a slow connection this could hang long enough that the seller gave up, leaving the listing stuck as an invisible, unpaid draft with no error anywhere. Now splits into a fast validation + payment-attempt phase (instant) and a background per-image upload phase, same as the new-listing flow, merging onto whichever gallery photos the seller kept rather than overwriting them. Changes in `frontend/native-forms.php` (new `ringo_ajax_native_finalize_edit_assets` AJAX action).
+- Not yet deployed to live - verified on staging4 only.
 
 ### 9.7.0 (2026-11-04)
 
