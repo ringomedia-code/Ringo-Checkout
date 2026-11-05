@@ -4,7 +4,7 @@ A WordPress plugin for [BassBoat4Sale.com](https://bassboat4sale.com) that handl
 
 | | |
 |---|---|
-| **Version** | 9.7.1 |
+| **Version** | 9.7.2 |
 | **Requires PHP** | 7.4 or newer |
 | **Text domain** | `ringo-checkout` |
 | **Author** | [Ringo Media](https://ringomedia.com/) |
@@ -227,6 +227,44 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 ## Changelog
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
+
+### 9.7.2 (2026-11-05)
+
+Four follow-up hardening fixes to the same background-upload system, found while
+auditing the 9.7.1 fix:
+
+- **Recovery cron added.** `stuck-assets-cron.php` could previously only flag a
+  stalled background upload as failed (no email sent, per 9.7.0) - it never
+  checked whether the photos actually all finished uploading and the listing
+  just never got marked complete (e.g. the process died between the last
+  item's upload and the merge/finalise step). Now runs first on every check
+  and, when the uploaded file count matches what was expected, finishes the
+  listing (and publishes it if payment already went through) instead of
+  leaving it stuck. Also fixes a gap where this safety net never even
+  considered edit/re-upload-path listings at all, since `_ringo_native_assets_started_at`
+  was only ever being set by the new-listing path.
+- **Stuck-payment timer is now upload-aware.** The 120-second "payment window
+  stuck" watchdog in `frontend/enqueue.php` never reset while a background
+  photo upload was progressing, so a seller legitimately waiting on a long
+  upload could still trigger a false stuck report. Upload progress now
+  refreshes the same activity timer real payment-stage changes do.
+- **Seller-facing retry message added.** `ringo/native-assets-failed` fired
+  with no listener anywhere in the codebase - a failed background upload was
+  silent to the seller. Now shows an inline message confirming payment is
+  unaffected and photos need re-uploading.
+- **Silent "ghost" submission failures are now logged.** Every rejection
+  branch in the initial submit and edit AJAX handlers (`ringo_ajax_native_submit_boat`,
+  `ringo_ajax_native_update_boat`) - honeypot trip, missing/invalid field,
+  taxonomy or upload failure - previously returned an error to the browser
+  with zero trace left anywhere for an admin to find afterward. Confirmed
+  this exact gap against a real same-day incident (a seller's submission
+  vanished with only a "new user registered" email and nothing else). All of
+  these now write to the same Email Logs page other plugin activity already
+  uses.
+
+Not yet deployed to live - staging4 only, each individually verified there
+(including reproducing the honeypot-triggered silent failure directly and
+confirming it now logs).
 
 ### 9.7.1 (2026-11-05)
 

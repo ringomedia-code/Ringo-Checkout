@@ -1570,20 +1570,29 @@ function ringo_native_cleanup_failed_submission( $post_id, $attachment_ids = [] 
  */
 function ringo_ajax_native_submit_boat() {
 	if ( ! is_user_logged_in() ) {
+		ringo_log( 'Native submit rejected: not logged in' );
 		wp_send_json_error( [ 'message' => 'Please sign in before submitting a listing.' ], 401 );
 	}
 
 	if ( ! isset( $_POST['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['nonce'] ) ), 'ringo_native_form_nonce' ) ) {
+		ringo_log( 'Native submit rejected: nonce check failed', [ 'user_id' => get_current_user_id() ] );
 		wp_send_json_error( [ 'message' => 'Security check failed. Refresh the page and try again.' ], 403 );
 	}
 
 	if ( ! empty( $_POST['company_website'] ) ) {
+		// Most likely a spam bot, but a browser can also autofill this hidden
+		// field for a real seller if it resembles a normal "website" field -
+		// this used to be a true silent "ghost listing": no post was ever
+		// created and nothing was logged anywhere, so a real false positive
+		// here was indistinguishable from the seller simply never trying.
+		ringo_log( 'Native submit rejected: honeypot field was filled', [ 'user_id' => get_current_user_id(), 'email' => isset( $_POST['email'] ) ? sanitize_email( wp_unslash( $_POST['email'] ) ) : '' ] );
 		wp_send_json_error( [ 'message' => 'Submission could not be processed.' ], 400 );
 	}
 
 	$user_id = get_current_user_id();
 	$lock    = 'ringo_native_submit_lock_' . $user_id;
 	if ( get_transient( $lock ) ) {
+		ringo_log( 'Native submit rejected: already processing (duplicate submit)', [ 'user_id' => $user_id ] );
 		wp_send_json_error( [ 'message' => 'Your listing is already being processed.' ], 429 );
 	}
 	set_transient( $lock, 1, 20 );
@@ -1622,28 +1631,34 @@ function ringo_ajax_native_submit_boat() {
 
 	foreach ( $required_text as $label => $value ) {
 		if ( '' === trim( (string) $value ) ) {
+			ringo_log( 'Native submit rejected: required field missing', [ 'user_id' => $user_id, 'field' => $label, 'email' => $email ] );
 			delete_transient( $lock );
 			wp_send_json_error( [ 'message' => $label . ' is required.' ], 422 );
 		}
 	}
 
 	if ( ! in_array( $package, ringo_native_valid_packages( $user_id ), true ) ) {
+		ringo_log( 'Native submit rejected: invalid package', [ 'user_id' => $user_id, 'package' => $package, 'email' => $email ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'Please select a valid package.' ], 422 );
 	}
 	if ( ! $email || ! is_email( $email ) ) {
+		ringo_log( 'Native submit rejected: invalid email', [ 'user_id' => $user_id, 'email' => $email ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'Please enter a valid email address.' ], 422 );
 	}
 	if ( ! is_string( $phone_digits ) || 10 !== strlen( $phone_digits ) || ! preg_match( '/^[0-9]{3}-[0-9]{3}-[0-9]{4}$/', $phone ) ) {
+		ringo_log( 'Native submit rejected: invalid phone format', [ 'user_id' => $user_id, 'email' => $email ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'Enter the phone number in xxx-xxx-xxxx format.' ], 422 );
 	}
 	if ( ! $agreement ) {
+		ringo_log( 'Native submit rejected: terms not agreed', [ 'user_id' => $user_id, 'email' => $email ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'Please accept the Terms & Conditions and Privacy Policy.' ], 422 );
 	}
 	if ( ! $contact && $price <= 0 ) {
+		ringo_log( 'Native submit rejected: missing price', [ 'user_id' => $user_id, 'email' => $email ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'Enter a price or select Contact For Pricing.' ], 422 );
 	}
@@ -1655,14 +1670,17 @@ function ringo_ajax_native_submit_boat() {
 		$cover_selected = ! empty( $_POST['ringo_cover_selected'] );
 		$gallery_count  = isset( $_POST['ringo_gallery_count'] ) ? absint( $_POST['ringo_gallery_count'] ) : 0;
 		if ( ! $cover_selected ) {
+			ringo_log( 'Native submit rejected: no cover photo selected', [ 'user_id' => $user_id, 'email' => $email ] );
 			delete_transient( $lock );
 			wp_send_json_error( [ 'message' => 'Please select a cover photo.' ], 422 );
 		}
 		if ( $gallery_count < 1 ) {
+			ringo_log( 'Native submit rejected: no gallery images selected', [ 'user_id' => $user_id, 'email' => $email ] );
 			delete_transient( $lock );
 			wp_send_json_error( [ 'message' => 'Please select at least one gallery image.' ], 422 );
 		}
 		if ( $gallery_count > $max_gallery ) {
+			ringo_log( 'Native submit rejected: gallery count exceeds package limit', [ 'user_id' => $user_id, 'email' => $email, 'requested' => $gallery_count, 'max' => $max_gallery ] );
 			delete_transient( $lock );
 			wp_send_json_error( [ 'message' => sprintf( 'Your package and add-ons allow up to %d gallery images.', $max_gallery ) ], 422 );
 		}
@@ -1677,8 +1695,9 @@ function ringo_ajax_native_submit_boat() {
 		'motor_year'  => [ 'taxonomy' => taxonomy_exists( 'motor-year' ) ? 'motor-year' : 'boat-year', 'term' => absint( $_POST['motor_year'] ?? 0 ) ],
 	];
 
-	foreach ( $taxonomy_fields as $field ) {
+	foreach ( $taxonomy_fields as $key => $field ) {
 		if ( empty( $field['term'] ) ) {
+			ringo_log( 'Native submit rejected: required boat selection missing', [ 'user_id' => $user_id, 'email' => $email, 'field' => $key ] );
 			delete_transient( $lock );
 			wp_send_json_error( [ 'message' => 'Please complete every required boat selection.' ], 422 );
 		}
@@ -1710,6 +1729,7 @@ function ringo_ajax_native_submit_boat() {
 	foreach ( $taxonomy_fields as $field ) {
 		$result = ringo_native_assign_term( $post_id, $field['taxonomy'], $field['term'], true );
 		if ( is_wp_error( $result ) ) {
+			ringo_log( 'Native submit rejected after post creation: taxonomy assign failed, post deleted', [ 'post_id' => $post_id, 'user_id' => $user_id, 'taxonomy' => $field['taxonomy'], 'error' => $result->get_error_message() ] );
 			ringo_native_cleanup_failed_submission( $post_id, $attachments );
 			delete_transient( $lock );
 			wp_send_json_error( [ 'message' => $result->get_error_message() ], 422 );
@@ -1718,12 +1738,14 @@ function ringo_ajax_native_submit_boat() {
 
 	$category_id = ringo_native_package_category_term_id( $package );
 	if ( ! $category_id ) {
+		ringo_log( 'Native submit rejected after post creation: package category not configured, post deleted', [ 'post_id' => $post_id, 'user_id' => $user_id, 'package' => $package ] );
 		ringo_native_cleanup_failed_submission( $post_id, $attachments );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'The package category is not configured. Please contact support.' ], 500 );
 	}
 	$category_result = ringo_native_assign_term( $post_id, 'boatcategories', $category_id, true );
 	if ( is_wp_error( $category_result ) ) {
+		ringo_log( 'Native submit rejected after post creation: category assign failed, post deleted', [ 'post_id' => $post_id, 'user_id' => $user_id, 'error' => $category_result->get_error_message() ] );
 		ringo_native_cleanup_failed_submission( $post_id, $attachments );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => $category_result->get_error_message() ], 500 );
@@ -1731,6 +1753,7 @@ function ringo_ajax_native_submit_boat() {
 
 	$ownership_result = ringo_native_assign_term( $post_id, 'boat-ownership', $is_dealer ? 5 : 4, true );
 	if ( is_wp_error( $ownership_result ) ) {
+		ringo_log( 'Native submit rejected after post creation: ownership term assign failed, post deleted', [ 'post_id' => $post_id, 'user_id' => $user_id, 'error' => $ownership_result->get_error_message() ] );
 		ringo_native_cleanup_failed_submission( $post_id, $attachments );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'The boat ownership term is not configured. Please contact support.' ], 500 );
@@ -1840,6 +1863,7 @@ function ringo_ajax_native_submit_boat() {
 
 	$cover_id = ringo_native_handle_single_upload( 'post_thumbnail', $post_id );
 	if ( is_wp_error( $cover_id ) ) {
+		ringo_log( 'Native submit rejected after post creation: cover upload failed, post deleted', [ 'post_id' => $post_id, 'user_id' => $user_id, 'error' => $cover_id->get_error_message() ] );
 		ringo_native_cleanup_failed_submission( $post_id, $attachments );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => $cover_id->get_error_message() ], 422 );
@@ -1849,6 +1873,7 @@ function ringo_ajax_native_submit_boat() {
 
 	$gallery_ids = ringo_native_handle_gallery_upload( 'gallery', $post_id, $max_gallery );
 	if ( is_wp_error( $gallery_ids ) ) {
+		ringo_log( 'Native submit rejected after post creation: gallery upload failed, post deleted', [ 'post_id' => $post_id, 'user_id' => $user_id, 'error' => $gallery_ids->get_error_message() ] );
 		ringo_native_cleanup_failed_submission( $post_id, $attachments );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => $gallery_ids->get_error_message() ], 422 );
@@ -1964,6 +1989,10 @@ function ringo_ajax_native_finalize_boat_assets() {
 	if ( 1 === $seq ) {
 		delete_post_meta( $post_id, '_ringo_native_assets_partial' );
 		update_post_meta( $post_id, '_ringo_native_assets_status', 'uploading' );
+		// Recorded so the recovery pass in stuck-assets-cron.php can tell a
+		// stalled-after-the-last-item sequence (files all present, finalize
+		// never ran) apart from one that is genuinely still missing photos.
+		update_post_meta( $post_id, '_ringo_native_assets_expected_total', $total );
 	}
 
 	// Force a fresh, non-cached read: this value was written by a previous
@@ -2035,6 +2064,7 @@ function ringo_ajax_native_finalize_boat_assets() {
 	update_post_meta( $post_id, '_ringo_native_assets_completed_at', time() );
 	delete_post_meta( $post_id, '_ringo_native_assets_error' );
 	delete_post_meta( $post_id, '_ringo_native_assets_partial' );
+	delete_post_meta( $post_id, '_ringo_native_assets_expected_total' );
 
 	ringo_log( 'Native boat images completed in background', [ 'post_id' => $post_id, 'images' => count( $attachments ) ] );
 
@@ -2065,6 +2095,7 @@ function ringo_native_fail_asset_sequence( $post_id, $lock, $partial, $message, 
 		wp_delete_attachment( (int) $item['id'], true );
 	}
 	delete_post_meta( $post_id, '_ringo_native_assets_partial' );
+	delete_post_meta( $post_id, '_ringo_native_assets_expected_total' );
 	update_post_meta( $post_id, '_ringo_native_assets_status', 'failed' );
 	update_post_meta( $post_id, '_ringo_native_assets_error', $message );
 	delete_transient( $lock );
@@ -2132,6 +2163,10 @@ function ringo_ajax_native_finalize_edit_assets() {
 	if ( 1 === $seq ) {
 		delete_post_meta( $post_id, '_ringo_native_assets_partial' );
 		update_post_meta( $post_id, '_ringo_native_assets_status', 'uploading' );
+		// Recorded so the recovery pass in stuck-assets-cron.php can tell a
+		// stalled-after-the-last-item sequence (files all present, finalize
+		// never ran) apart from one that is genuinely still missing photos.
+		update_post_meta( $post_id, '_ringo_native_assets_expected_total', $total );
 	}
 
 	// Force a fresh, non-cached read, same reasoning as the new-listing finalize:
@@ -2209,6 +2244,7 @@ function ringo_ajax_native_finalize_edit_assets() {
 	update_post_meta( $post_id, '_ringo_native_assets_completed_at', time() );
 	delete_post_meta( $post_id, '_ringo_native_assets_error' );
 	delete_post_meta( $post_id, '_ringo_native_assets_partial' );
+	delete_post_meta( $post_id, '_ringo_native_assets_expected_total' );
 	delete_post_meta( $post_id, '_ringo_native_edit_kept_gallery' );
 
 	ringo_log( 'Native edit images completed in background', [ 'post_id' => $post_id, 'images' => count( $partial ) ] );
@@ -2240,6 +2276,7 @@ function ringo_native_fail_edit_asset_sequence( $post_id, $lock, $partial, $mess
 		wp_delete_attachment( (int) $item['id'], true );
 	}
 	delete_post_meta( $post_id, '_ringo_native_assets_partial' );
+	delete_post_meta( $post_id, '_ringo_native_assets_expected_total' );
 	update_post_meta( $post_id, '_ringo_native_assets_status', 'failed' );
 	update_post_meta( $post_id, '_ringo_native_assets_error', $message );
 	delete_transient( $lock );
@@ -2303,28 +2340,34 @@ function ringo_native_send_edit_notifications( $post_id ) {
  */
 function ringo_ajax_native_update_boat() {
 	if ( ! is_user_logged_in() ) {
+		ringo_log( 'Native edit rejected: not logged in' );
 		wp_send_json_error( [ 'message' => 'Please sign in before editing a listing.' ], 401 );
 	}
 
 	if ( ! isset( $_POST['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['nonce'] ) ), 'ringo_native_form_nonce' ) ) {
+		ringo_log( 'Native edit rejected: nonce check failed', [ 'user_id' => get_current_user_id() ] );
 		wp_send_json_error( [ 'message' => 'Security check failed. Refresh the page and try again.' ], 403 );
 	}
 
 	if ( ! empty( $_POST['company_website'] ) ) {
+		ringo_log( 'Native edit rejected: honeypot field was filled', [ 'user_id' => get_current_user_id(), 'post_id' => isset( $_POST['_post_id'] ) ? absint( $_POST['_post_id'] ) : 0 ] );
 		wp_send_json_error( [ 'message' => 'The update could not be processed.' ], 400 );
 	}
 
 	$post_id = isset( $_POST['_post_id'] ) ? absint( $_POST['_post_id'] ) : 0;
 	$post    = $post_id ? get_post( $post_id ) : null;
 	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
+		ringo_log( 'Native edit rejected: boat listing not found', [ 'user_id' => get_current_user_id(), 'post_id' => $post_id ] );
 		wp_send_json_error( [ 'message' => 'Boat listing not found.' ], 404 );
 	}
 	if ( ! ringo_native_user_can_access_boat( $post_id ) ) {
+		ringo_log( 'Native edit rejected: user cannot access this listing', [ 'user_id' => get_current_user_id(), 'post_id' => $post_id ] );
 		wp_send_json_error( [ 'message' => 'You do not have permission to edit this listing.' ], 403 );
 	}
 
 	$lock = 'ringo_native_edit_lock_' . $post_id . '_' . get_current_user_id();
 	if ( get_transient( $lock ) ) {
+		ringo_log( 'Native edit rejected: already processing (duplicate submit)', [ 'post_id' => $post_id ] );
 		wp_send_json_error( [ 'message' => 'This listing update is already being processed.' ], 429 );
 	}
 	set_transient( $lock, 1, 30 );
@@ -2343,6 +2386,7 @@ function ringo_ajax_native_update_boat() {
 	$paid          = ringo_native_boat_is_paid( $post_id );
 	$is_fast_phase = ! $paid && ! empty( $_POST['ringo_fast_phase'] );
 	if ( $is_fast_phase && 'uploading' === get_post_meta( $post_id, '_ringo_native_assets_status', true ) ) {
+		ringo_log( 'Native edit rejected: previous background upload still in progress', [ 'post_id' => $post_id ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'A previous photo upload for this listing is still in progress. Please wait a moment and try again.' ], 429 );
 	}
@@ -2367,19 +2411,23 @@ function ringo_ajax_native_update_boat() {
 	];
 	foreach ( $required_text as $label => $value ) {
 		if ( '' === trim( (string) $value ) ) {
+			ringo_log( 'Native edit rejected: required field missing', [ 'post_id' => $post_id, 'field' => $label ] );
 			delete_transient( $lock );
 			wp_send_json_error( [ 'message' => $label . ' is required.' ], 422 );
 		}
 	}
 	if ( ! $email || ! is_email( $email ) ) {
+		ringo_log( 'Native edit rejected: invalid email', [ 'post_id' => $post_id, 'email' => $email ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'Please enter a valid email address.' ], 422 );
 	}
 	if ( ! is_string( $phone_digits ) || 10 !== strlen( $phone_digits ) || ! preg_match( '/^[0-9]{3}-[0-9]{3}-[0-9]{4}$/', $phone ) ) {
+		ringo_log( 'Native edit rejected: invalid phone format', [ 'post_id' => $post_id ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'Enter the phone number in xxx-xxx-xxxx format.' ], 422 );
 	}
 	if ( ! $contact && $price <= 0 ) {
+		ringo_log( 'Native edit rejected: missing price', [ 'post_id' => $post_id ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'Enter a price or select Contact For Pricing.' ], 422 );
 	}
@@ -2396,6 +2444,7 @@ function ringo_ajax_native_update_boat() {
 	];
 	foreach ( $taxonomy_fields as $field ) {
 		if ( empty( $field['term'] ) ) {
+			ringo_log( 'Native edit rejected: required boat selection missing', [ 'post_id' => $post_id, 'taxonomy' => $field['taxonomy'] ] );
 			delete_transient( $lock );
 			wp_send_json_error( [ 'message' => 'Please complete every required boat selection.' ], 422 );
 		}
@@ -2404,6 +2453,7 @@ function ringo_ajax_native_update_boat() {
 	$cover_id          = get_post_thumbnail_id( $post_id );
 	$cover_will_upload = $is_fast_phase ? ! empty( $_POST['ringo_cover_selected'] ) : ringo_native_has_uploaded_file( 'post_thumbnail' );
 	if ( ! $cover_id && ! $cover_will_upload ) {
+		ringo_log( 'Native edit rejected: no featured image', [ 'post_id' => $post_id ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'A featured image is required.' ], 422 );
 	}
@@ -2415,10 +2465,12 @@ function ringo_ajax_native_update_boat() {
 	$max_gallery     = ringo_native_max_gallery_images( (int) $post->post_author, $package, $addon_ids );
 
 	if ( count( $kept_gallery ) + $new_count > $max_gallery ) {
+		ringo_log( 'Native edit rejected: gallery count exceeds package limit', [ 'post_id' => $post_id, 'kept' => count( $kept_gallery ), 'new' => $new_count, 'max' => $max_gallery ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => sprintf( 'This package allows up to %d gallery images in total.', $max_gallery ) ], 422 );
 	}
 	if ( 0 === count( $kept_gallery ) + $new_count ) {
+		ringo_log( 'Native edit rejected: no gallery images left', [ 'post_id' => $post_id ] );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'Keep or upload at least one gallery image.' ], 422 );
 	}
@@ -2435,6 +2487,7 @@ function ringo_ajax_native_update_boat() {
 		if ( ringo_native_has_uploaded_file( 'post_thumbnail' ) ) {
 			$new_cover_id = ringo_native_handle_single_upload( 'post_thumbnail', $post_id );
 			if ( is_wp_error( $new_cover_id ) ) {
+				ringo_log( 'Native edit rejected: cover upload failed', [ 'post_id' => $post_id, 'error' => $new_cover_id->get_error_message() ] );
 				delete_transient( $lock );
 				wp_send_json_error( [ 'message' => $new_cover_id->get_error_message() ], 422 );
 			}
@@ -2446,6 +2499,7 @@ function ringo_ajax_native_update_boat() {
 			$remaining_slots = max( 1, $max_gallery - count( $kept_gallery ) );
 			$new_gallery_ids = ringo_native_handle_gallery_upload( 'gallery', $post_id, $remaining_slots, count( $kept_gallery ) );
 			if ( is_wp_error( $new_gallery_ids ) ) {
+				ringo_log( 'Native edit rejected: gallery upload failed', [ 'post_id' => $post_id, 'error' => $new_gallery_ids->get_error_message() ] );
 				ringo_native_cleanup_edit_attachments( $new_attachments );
 				delete_transient( $lock );
 				wp_send_json_error( [ 'message' => $new_gallery_ids->get_error_message() ], 422 );
@@ -2492,6 +2546,7 @@ function ringo_ajax_native_update_boat() {
 		wp_send_json_error( [ 'message' => 'The listing could not be updated. Please try again.' ], 500 );
 	}
 	if ( is_wp_error( $updated ) ) {
+		ringo_log( 'Native edit rejected: wp_update_post failed', [ 'post_id' => $post_id, 'error' => $updated->get_error_message() ] );
 		ringo_native_cleanup_edit_attachments( $new_attachments );
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => $updated->get_error_message() ], 500 );
@@ -2515,6 +2570,7 @@ function ringo_ajax_native_update_boat() {
 	foreach ( $taxonomy_fields as $field ) {
 		$result = ringo_native_assign_term( $post_id, $field['taxonomy'], $field['term'], true );
 		if ( is_wp_error( $result ) ) {
+			ringo_log( 'Native edit rejected: taxonomy assign failed after update', [ 'post_id' => $post_id, 'taxonomy' => $field['taxonomy'], 'error' => $result->get_error_message() ] );
 			delete_transient( $lock );
 			wp_send_json_error( [ 'message' => $result->get_error_message() ], 422 );
 		}
@@ -2567,6 +2623,12 @@ function ringo_ajax_native_update_boat() {
 			if ( $has_new_assets ) {
 				update_post_meta( $post_id, '_ringo_native_edit_kept_gallery', $kept_gallery );
 				update_post_meta( $post_id, '_ringo_native_assets_status', 'uploading' );
+				// Without this, the existing stuck-assets-cron.php query (which
+				// requires _ringo_native_assets_started_at to exist) can never
+				// find an edit-path stall - that meta key was only ever set by
+				// the new-listing fast phase, so edit-path stalls were silently
+				// outside its safety net entirely.
+				update_post_meta( $post_id, '_ringo_native_assets_started_at', time() );
 			} else {
 				// Nothing new to upload this round - clear any stale status/partial
 				// left over from an earlier edit round on this same post, so the
@@ -3218,6 +3280,20 @@ jQuery(function($){
       $button.prop('disabled', false).text(originalText);
       $(document).trigger('ringo/native-submit-failed');
     });
+  });
+
+  // The background per-image upload (uploadAssetsInBackground above) can fail
+  // after the main submit already succeeded and the payment screen is showing.
+  // Before this, that failure was silent - the event fired with no listener
+  // anywhere, so the seller never saw anything. Payment itself is unaffected
+  // (the attempt already started and stays open); only the photos need a retry.
+  $(document).on('ringo/native-assets-failed', function(e, response, form){
+    var $form = $(form);
+    setMessage(
+      $form,
+      'Your listing details were saved and you can still complete payment. Some photos did not finish uploading - please re-upload them from your account page once payment is done.',
+      'error'
+    );
   });
 });
 JS

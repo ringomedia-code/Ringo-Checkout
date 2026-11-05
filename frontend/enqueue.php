@@ -457,8 +457,17 @@ jQuery(function($){
   }
 
   $(document).on('ringo/native-assets-progress', function(e, data){
+    // A long background photo upload is legitimate activity, not an idle payment
+    // screen - without this, RINGO_STUCK_AFTER_MS below has no way to know the
+    // seller is still mid-upload and reports a false "payment window stuck"
+    // condition purely because the upload (not the seller) is taking a while.
+    touchPaymentState();
     if (!data) return;
     updateUploadWaitOverlay(data.doneFiles, data.totalFiles, data.percent);
+  });
+
+  $(document).on('ringo/native-assets-complete', function(){
+    touchPaymentState();
   });
 
   function redirectAfterNativeAssets(url) {
