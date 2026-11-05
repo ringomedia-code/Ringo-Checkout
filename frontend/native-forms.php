@@ -2072,6 +2072,181 @@ function ringo_native_fail_asset_sequence( $post_id, $lock, $partial, $message, 
 	wp_send_json_error( [ 'message' => $message ], 422 );
 }
 
+add_action( 'wp_ajax_ringo_native_finalize_edit_assets', 'ringo_ajax_native_finalize_edit_assets' );
+
+/**
+ * AJAX: background per-image upload step for the unpaid edit/re-upload form.
+ *
+ * Sibling to ringo_ajax_native_finalize_boat_assets(), not a shared branch of
+ * it: that function legitimately overwrites `gallery` meta from an empty
+ * starting point for a brand-new listing. An edit must instead MERGE new
+ * uploads onto whatever gallery images the seller chose to keep
+ * (`_ringo_native_edit_kept_gallery`, snapshotted by ringo_ajax_native_update_boat()
+ * in its fast phase) - tangling both invariants into one function risks a
+ * future change to the new-listing path silently breaking this merge, or
+ * vice versa.
+ *
+ * Writes to the SAME `_ringo_native_assets_status` / `_ringo_native_assets_partial`
+ * / `_ringo_native_assets_error` meta keys the new-listing path uses, on
+ * purpose: ringo_process_paid() already has a generic "defer publish until
+ * background images finish" check keyed off `_ringo_native_assets_status`,
+ * and ringo_finalize_paid_boat_after_assets() already gets called from here
+ * exactly like the new-listing finalize does - reusing those keys means the
+ * existing "seller finishes payment while the upload is still running" race
+ * is covered with no new code.
+ *
+ * @return void
+ */
+function ringo_ajax_native_finalize_edit_assets() {
+	if ( ! is_user_logged_in() ) {
+		wp_send_json_error( [ 'message' => 'Please sign in before uploading listing images.' ], 401 );
+	}
+
+	if ( ! isset( $_POST['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['nonce'] ) ), 'ringo_native_form_nonce' ) ) {
+		wp_send_json_error( [ 'message' => 'Security check failed. Refresh the page and try again.' ], 403 );
+	}
+
+	$post_id = isset( $_POST['boat_post_id'] ) ? absint( $_POST['boat_post_id'] ) : 0;
+	$post    = $post_id ? get_post( $post_id ) : null;
+	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {
+		wp_send_json_error( [ 'message' => 'Boat listing not found.' ], 404 );
+	}
+	if ( ! ringo_native_user_can_access_boat( $post_id ) ) {
+		wp_send_json_error( [ 'message' => 'You do not have permission to upload images for this listing.' ], 403 );
+	}
+
+	$role  = isset( $_POST['role'] ) ? sanitize_key( (string) wp_unslash( $_POST['role'] ) ) : '';
+	$seq   = isset( $_POST['seq'] ) ? max( 1, absint( $_POST['seq'] ) ) : 1;
+	$total = isset( $_POST['total'] ) ? max( 1, absint( $_POST['total'] ) ) : 1;
+
+	if ( ! in_array( $role, [ 'cover', 'gallery' ], true ) ) {
+		wp_send_json_error( [ 'message' => 'Invalid upload request.' ], 400 );
+	}
+
+	$lock = 'ringo_edit_assets_lock_' . $post_id;
+	if ( get_transient( $lock ) ) {
+		wp_send_json_error( [ 'message' => 'Listing images are already being uploaded.' ], 429 );
+	}
+	set_transient( $lock, 1, 60 );
+
+	if ( 1 === $seq ) {
+		delete_post_meta( $post_id, '_ringo_native_assets_partial' );
+		update_post_meta( $post_id, '_ringo_native_assets_status', 'uploading' );
+	}
+
+	// Force a fresh, non-cached read, same reasoning as the new-listing finalize:
+	// this value was written by a previous request in the same sequence.
+	wp_cache_delete( $post_id, 'post_meta' );
+	$partial = get_post_meta( $post_id, '_ringo_native_assets_partial', true );
+	$partial = is_array( $partial ) ? $partial : [];
+
+	$kept_gallery = get_post_meta( $post_id, '_ringo_native_edit_kept_gallery', true );
+	$kept_gallery = is_array( $kept_gallery ) ? array_map( 'absint', $kept_gallery ) : [];
+
+	if ( 'cover' === $role ) {
+		$result = ringo_native_handle_single_upload( 'post_thumbnail', $post_id );
+		if ( is_wp_error( $result ) ) {
+			ringo_native_fail_edit_asset_sequence( $post_id, $lock, $partial, $result->get_error_message(), 'post_thumbnail' );
+		}
+		$attachment_id = (int) $result;
+		// Do NOT set_post_thumbnail() yet - deferred to the final item below, so
+		// a later item failing mid-sequence (which rolls back everything in
+		// $partial) can never leave the live listing pointed at a since-deleted
+		// attachment.
+	} else {
+		$package        = ringo_native_existing_boat_package( $post_id, (int) $post->post_author );
+		$max_gallery    = ringo_native_max_gallery_images( (int) $post->post_author, $package, ringo_get_boat_addon_ids( $post_id ) );
+		$gallery_so_far = count( array_filter( $partial, function ( $item ) { return isset( $item['role'] ) && 'gallery' === $item['role']; } ) );
+		$effective_used = count( $kept_gallery ) + $gallery_so_far;
+		if ( $effective_used >= $max_gallery ) {
+			ringo_native_fail_edit_asset_sequence( $post_id, $lock, $partial, sprintf( 'This package allows up to %d gallery images.', $max_gallery ), 'gallery' );
+		}
+		$result = ringo_native_handle_gallery_upload( 'gallery', $post_id, max( 1, $max_gallery - $effective_used ), $effective_used );
+		if ( is_wp_error( $result ) ) {
+			ringo_native_fail_edit_asset_sequence( $post_id, $lock, $partial, $result->get_error_message(), 'gallery' );
+		}
+		$attachment_id = (int) $result[0];
+	}
+
+	$partial[] = [ 'id' => $attachment_id, 'role' => $role ];
+	update_post_meta( $post_id, '_ringo_native_assets_partial', $partial );
+	delete_transient( $lock );
+
+	if ( $seq < $total ) {
+		wp_send_json_success( [ 'post_id' => $post_id, 'status' => 'uploading', 'seq' => $seq, 'total' => $total ] );
+	}
+
+	// Last item in the sequence - merge onto $kept_gallery (never overwrite
+	// from empty, that's the one real difference from the new-listing finalize).
+	$new_cover_id = 0;
+	foreach ( $partial as $item ) {
+		if ( 'cover' === $item['role'] ) {
+			$new_cover_id = (int) $item['id'];
+			break;
+		}
+	}
+	$new_gallery_ids = array_values( array_map(
+		function ( $item ) { return (int) $item['id']; },
+		array_filter( $partial, function ( $item ) { return 'gallery' === $item['role']; } )
+	) );
+	$final_gallery = array_values( array_unique( array_filter( array_merge(
+		$new_cover_id ? [ $new_cover_id ] : [],
+		$kept_gallery,
+		$new_gallery_ids
+	) ) ) );
+	update_post_meta( $post_id, 'gallery', implode( ',', $final_gallery ) );
+	if ( $new_cover_id ) {
+		set_post_thumbnail( $post_id, $new_cover_id );
+	}
+
+	$tracked_uploads = ringo_native_gallery_ids_from_value( get_post_meta( $post_id, '_ringo_uploaded_file_ids', true ) );
+	$tracked_uploads = array_values( array_unique( array_merge(
+		$tracked_uploads,
+		array_map( function ( $item ) { return (int) $item['id']; }, $partial )
+	) ) );
+	update_post_meta( $post_id, '_ringo_uploaded_file_ids', $tracked_uploads );
+	update_post_meta( $post_id, '_ringo_native_assets_status', 'complete' );
+	update_post_meta( $post_id, '_ringo_native_assets_completed_at', time() );
+	delete_post_meta( $post_id, '_ringo_native_assets_error' );
+	delete_post_meta( $post_id, '_ringo_native_assets_partial' );
+	delete_post_meta( $post_id, '_ringo_native_edit_kept_gallery' );
+
+	ringo_log( 'Native edit images completed in background', [ 'post_id' => $post_id, 'images' => count( $partial ) ] );
+
+	// A fast buyer can finish payment before this background upload ends. If
+	// ringo_process_paid() deferred publishing because of it, complete it now.
+	if ( get_post_meta( $post_id, '_ringo_publish_pending_assets', true ) ) {
+		ringo_finalize_paid_boat_after_assets( $post_id );
+	}
+
+	wp_send_json_success( [ 'post_id' => $post_id, 'file_count' => count( $partial ), 'status' => 'complete' ] );
+}
+
+/**
+ * Roll back a failed item in the edit-form per-image upload sequence: delete
+ * everything accumulated so far in THIS sequence (never touches the
+ * previously-kept gallery), clear the partial state, mark the listing's
+ * assets as failed, and respond with an error (exits via wp_send_json_error).
+ *
+ * @param int    $post_id
+ * @param string $lock     Transient key to release.
+ * @param array  $partial  Attachments accumulated so far this sequence: [ [ 'id' => int, 'role' => string ], ... ].
+ * @param string $message
+ * @param string $field
+ * @return void
+ */
+function ringo_native_fail_edit_asset_sequence( $post_id, $lock, $partial, $message, $field ) {
+	foreach ( $partial as $item ) {
+		wp_delete_attachment( (int) $item['id'], true );
+	}
+	delete_post_meta( $post_id, '_ringo_native_assets_partial' );
+	update_post_meta( $post_id, '_ringo_native_assets_status', 'failed' );
+	update_post_meta( $post_id, '_ringo_native_assets_error', $message );
+	delete_transient( $lock );
+	ringo_record_draft_failure( $post_id, 'background_image_upload_failed', $message, [ 'source' => 'native_edit_assets', 'field' => $field ] );
+	wp_send_json_error( [ 'message' => $message ], 422 );
+}
+
 /**
  * Remove attachments created during a failed edit request.
  *
@@ -2165,7 +2340,12 @@ function ringo_ajax_native_update_boat() {
 	$city         = ringo_native_post_text( 'city' );
 	$contact      = ! empty( $_POST['contact_for_pricing'] );
 	$price        = isset( $_POST['price'] ) ? (float) wp_unslash( $_POST['price'] ) : 0;
-	$paid         = ringo_native_boat_is_paid( $post_id );
+	$paid          = ringo_native_boat_is_paid( $post_id );
+	$is_fast_phase = ! $paid && ! empty( $_POST['ringo_fast_phase'] );
+	if ( $is_fast_phase && 'uploading' === get_post_meta( $post_id, '_ringo_native_assets_status', true ) ) {
+		delete_transient( $lock );
+		wp_send_json_error( [ 'message' => 'A previous photo upload for this listing is still in progress. Please wait a moment and try again.' ], 429 );
+	}
 	$package      = ringo_native_existing_boat_package( $post_id, (int) $post->post_author );
 	$addon_ids    = ringo_get_boat_addon_ids( $post_id );
 	$max_videos   = ringo_native_max_video_fields( $package, $addon_ids );
@@ -2221,8 +2401,9 @@ function ringo_ajax_native_update_boat() {
 		}
 	}
 
-	$cover_id = get_post_thumbnail_id( $post_id );
-	if ( ! $cover_id && ! ringo_native_has_uploaded_file( 'post_thumbnail' ) ) {
+	$cover_id          = get_post_thumbnail_id( $post_id );
+	$cover_will_upload = $is_fast_phase ? ! empty( $_POST['ringo_cover_selected'] ) : ringo_native_has_uploaded_file( 'post_thumbnail' );
+	if ( ! $cover_id && ! $cover_will_upload ) {
 		delete_transient( $lock );
 		wp_send_json_error( [ 'message' => 'A featured image is required.' ], 422 );
 	}
@@ -2230,7 +2411,7 @@ function ringo_ajax_native_update_boat() {
 	$current_gallery = ringo_native_get_boat_gallery_ids( $post_id );
 	$remove_gallery  = isset( $_POST['remove_gallery'] ) && is_array( $_POST['remove_gallery'] ) ? array_map( 'absint', wp_unslash( $_POST['remove_gallery'] ) ) : [];
 	$kept_gallery    = array_values( array_diff( $current_gallery, $remove_gallery ) );
-	$new_count       = ringo_native_multiple_upload_count( 'gallery' );
+	$new_count       = $is_fast_phase ? absint( $_POST['ringo_gallery_count'] ?? 0 ) : ringo_native_multiple_upload_count( 'gallery' );
 	$max_gallery     = ringo_native_max_gallery_images( (int) $post->post_author, $package, $addon_ids );
 
 	if ( count( $kept_gallery ) + $new_count > $max_gallery ) {
@@ -2243,39 +2424,47 @@ function ringo_ajax_native_update_boat() {
 	}
 
 	$new_attachments = [];
-	$new_cover_id    = 0;
-	if ( ringo_native_has_uploaded_file( 'post_thumbnail' ) ) {
-		$new_cover_id = ringo_native_handle_single_upload( 'post_thumbnail', $post_id );
-		if ( is_wp_error( $new_cover_id ) ) {
-			delete_transient( $lock );
-			wp_send_json_error( [ 'message' => $new_cover_id->get_error_message() ], 422 );
+	if ( $is_fast_phase ) {
+		// Files upload in the background after this request returns (see
+		// ringo_ajax_native_finalize_edit_assets()). Gallery meta is set to
+		// exactly what the seller is keeping now; the merge with newly
+		// uploaded photos happens once that background sequence completes.
+		update_post_meta( $post_id, 'gallery', implode( ',', $kept_gallery ) );
+	} else {
+		$new_cover_id = 0;
+		if ( ringo_native_has_uploaded_file( 'post_thumbnail' ) ) {
+			$new_cover_id = ringo_native_handle_single_upload( 'post_thumbnail', $post_id );
+			if ( is_wp_error( $new_cover_id ) ) {
+				delete_transient( $lock );
+				wp_send_json_error( [ 'message' => $new_cover_id->get_error_message() ], 422 );
+			}
+			$new_attachments[] = (int) $new_cover_id;
 		}
-		$new_attachments[] = (int) $new_cover_id;
-	}
 
-	$new_gallery_ids = [];
-	if ( $new_count > 0 ) {
-		$remaining_slots = max( 1, $max_gallery - count( $kept_gallery ) );
-		$new_gallery_ids = ringo_native_handle_gallery_upload( 'gallery', $post_id, $remaining_slots, count( $kept_gallery ) );
-		if ( is_wp_error( $new_gallery_ids ) ) {
-			ringo_native_cleanup_edit_attachments( $new_attachments );
-			delete_transient( $lock );
-			wp_send_json_error( [ 'message' => $new_gallery_ids->get_error_message() ], 422 );
+		$new_gallery_ids = [];
+		if ( $new_count > 0 ) {
+			$remaining_slots = max( 1, $max_gallery - count( $kept_gallery ) );
+			$new_gallery_ids = ringo_native_handle_gallery_upload( 'gallery', $post_id, $remaining_slots, count( $kept_gallery ) );
+			if ( is_wp_error( $new_gallery_ids ) ) {
+				ringo_native_cleanup_edit_attachments( $new_attachments );
+				delete_transient( $lock );
+				wp_send_json_error( [ 'message' => $new_gallery_ids->get_error_message() ], 422 );
+			}
+			$new_attachments = array_merge( $new_attachments, $new_gallery_ids );
 		}
-		$new_attachments = array_merge( $new_attachments, $new_gallery_ids );
-	}
 
-	// The single-boat-page slider reads only the `gallery` meta field, so a
-	// newly-uploaded cover is added here too, in addition to being the post
-	// thumbnail, or it would not appear in the slider until a later edit.
-	$final_gallery = array_values( array_unique( array_filter( array_merge(
-		$new_cover_id ? [ (int) $new_cover_id ] : [],
-		$kept_gallery,
-		array_map( 'absint', $new_gallery_ids )
-	) ) ) );
-	update_post_meta( $post_id, 'gallery', implode( ',', $final_gallery ) );
-	if ( $new_cover_id ) {
-		set_post_thumbnail( $post_id, (int) $new_cover_id );
+		// The single-boat-page slider reads only the `gallery` meta field, so a
+		// newly-uploaded cover is added here too, in addition to being the post
+		// thumbnail, or it would not appear in the slider until a later edit.
+		$final_gallery = array_values( array_unique( array_filter( array_merge(
+			$new_cover_id ? [ (int) $new_cover_id ] : [],
+			$kept_gallery,
+			array_map( 'absint', $new_gallery_ids )
+		) ) ) );
+		update_post_meta( $post_id, 'gallery', implode( ',', $final_gallery ) );
+		if ( $new_cover_id ) {
+			set_post_thumbnail( $post_id, (int) $new_cover_id );
+		}
 	}
 
 	$post_status = $post->post_status;
@@ -2314,7 +2503,7 @@ function ringo_ajax_native_update_boat() {
 	$current_cover_id = (int) get_post_thumbnail_id( $post_id );
 	foreach ( array_unique( array_intersect( $remove_gallery, $current_gallery ) ) as $removed_id ) {
 		$removed_id = absint( $removed_id );
-		if ( ! $removed_id || $removed_id === $current_cover_id || in_array( $removed_id, $final_gallery, true ) ) {
+		if ( ! $removed_id || $removed_id === $current_cover_id || in_array( $removed_id, $kept_gallery, true ) ) {
 			continue;
 		}
 		$removed_post = get_post( $removed_id );
@@ -2373,23 +2562,40 @@ function ringo_ajax_native_update_boat() {
 	ringo_native_sync_legacy_post_id_meta( $post_id, get_post( $post_id ), true );
 
 	if ( ! $paid ) {
+		$has_new_assets = $is_fast_phase && ( $cover_will_upload || $new_count > 0 );
+		if ( $is_fast_phase ) {
+			if ( $has_new_assets ) {
+				update_post_meta( $post_id, '_ringo_native_edit_kept_gallery', $kept_gallery );
+				update_post_meta( $post_id, '_ringo_native_assets_status', 'uploading' );
+			} else {
+				// Nothing new to upload this round - clear any stale status/partial
+				// left over from an earlier edit round on this same post, so the
+				// paid-while-uploading defer check in ringo_process_paid() can't
+				// get stuck on old state.
+				update_post_meta( $post_id, '_ringo_native_assets_status', 'complete' );
+				delete_post_meta( $post_id, '_ringo_native_assets_partial' );
+				delete_post_meta( $post_id, '_ringo_native_edit_kept_gallery' );
+			}
+		}
+
 		ringo_set_payment_meta( $post_id, 'pending', 'unpaid', $package, $amount, '', ringo_get_draft_edit_url( $post_id ), 'native-edit-pay' );
 		$attempt_id = ringo_begin_payment_attempt( $post_id, 'draft_created' );
 		$now        = time();
 		update_post_meta( $post_id, 'payment_status', 'unpaid' );
 		update_post_meta( $post_id, '_ringo_unpaid_time', $now );
 		update_post_meta( $post_id, '_ringo_checkout_created_at', $now );
-		ringo_log( 'Native unpaid boat edited before payment', [ 'post_id' => $post_id, 'package' => $package, 'amount' => $amount, 'attempt_id' => $attempt_id ] );
+		ringo_log( 'Native unpaid boat edited before payment', [ 'post_id' => $post_id, 'package' => $package, 'amount' => $amount, 'attempt_id' => $attempt_id, 'fast_phase' => $is_fast_phase ] );
 		delete_transient( $lock );
 		wp_send_json_success(
 			[
-				'inserted_post_id' => (string) $post_id,
+				'inserted_post_id'  => (string) $post_id,
 				'post_id'           => (string) $post_id,
 				'package_name'      => $package,
 				'package_price'     => $amount,
 				'user_email'        => $email,
 				'payment_started'   => true,
 				'ringo_native'      => true,
+				'assets_background' => $has_new_assets,
 			]
 		);
 	}
@@ -2857,7 +3063,15 @@ jQuery(function($){
 
     var requestData = new FormData(form);
     var isFastNewBoat = $form.attr('data-form-id') === '1204';
-    if (isFastNewBoat) {
+    // Any unpaid edit (re-upload on an existing draft via the checkout link)
+    // gets the same background-upload treatment as a brand-new listing, so a
+    // seller with many photos isn't blocked from paying while they all upload -
+    // data-ringo-defer-payment is only '1' on the unpaid edit form, so this
+    // naturally excludes the paid-edit form from the change.
+    var isDeferredEdit = $form.is('[data-ringo-edit-form]') && $form.attr('data-ringo-defer-payment') === '1';
+    var isBackgroundUpload = isFastNewBoat || isDeferredEdit;
+    var finalizeAction = isFastNewBoat ? 'ringo_native_finalize_boat_assets' : 'ringo_native_finalize_edit_assets';
+    if (isBackgroundUpload) {
       var coverInput = $form.find('input[name="post_thumbnail"]').get(0);
       var galleryInput = $form.find('[data-ringo-gallery]').get(0);
       requestData.delete('post_thumbnail');
@@ -2867,7 +3081,7 @@ jQuery(function($){
       requestData.append('ringo_gallery_count', galleryInput && galleryInput.files ? String(galleryInput.files.length) : '0');
     }
 
-    function uploadAssetsInBackground(postId) {
+    function uploadAssetsInBackground(postId, finalizeAction) {
       var coverInput = $form.find('input[name="post_thumbnail"]').get(0);
       var galleryInput = $form.find('[data-ringo-gallery]').get(0);
       var nonce = $form.find('[name="nonce"]').val() || '';
@@ -2905,7 +3119,7 @@ jQuery(function($){
         var item = queue[index];
         var seq  = index + 1;
         var itemData = new FormData();
-        itemData.append('action', 'ringo_native_finalize_boat_assets');
+        itemData.append('action', finalizeAction);
         itemData.append('nonce', nonce);
         itemData.append('boat_post_id', postId);
         itemData.append('role', item.role);
@@ -2967,7 +3181,7 @@ jQuery(function($){
       data: requestData,
       processData: false,
       contentType: false,
-      timeout: isFastNewBoat ? 60000 : 300000
+      timeout: isBackgroundUpload ? 60000 : 300000
     }).done(function(response){
       if (!response || !response.success) {
         var message = response && response.data && response.data.message ? response.data.message : 'Submission failed. Please try again.';
@@ -2989,8 +3203,8 @@ jQuery(function($){
 
       setMessage($form, '', '');
       $(document).trigger('jet-form-builder/ajax/on-success', [response, form]);
-      if (isFastNewBoat && responseData.assets_background && responseData.post_id) {
-        uploadAssetsInBackground(responseData.post_id);
+      if (isBackgroundUpload && responseData.assets_background && responseData.post_id) {
+        uploadAssetsInBackground(responseData.post_id, finalizeAction);
       }
     }).fail(function(xhr, status){
       var message = 'Submission failed. Please try again.';
