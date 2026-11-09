@@ -1,10 +1,10 @@
 <?php
 /**
  * Safety net for native boat listings whose background photo upload never
- * finished after payment (e.g. the thank-you redirect fired before the
- * background cover/gallery upload request completed, and the browser
- * navigation cancelled it). Flags such listings so they don't sit as an
- * invisible draft forever - no customer/admin email is sent for this case.
+ * finished - whether that's an unpaid draft abandoned mid-upload, or a boat
+ * that got marked paid (and published immediately, per ringo_process_paid())
+ * while photos were still uploading/failed. Flags such listings internally
+ * so staff can follow up - no customer email is ever sent for this case.
  *
  * @package RingoCheckout
  */
@@ -28,9 +28,13 @@ function ringo_schedule_stuck_assets_check() {
 }
 
 /**
- * Find paid listings where the background cover/gallery upload started but
- * never reached 'complete', and flag them as failed so the listing does not
- * sit as an invisible draft forever.
+ * Find listings where the background cover/gallery upload started but never
+ * reached 'complete' - both unpaid drafts (abandoned mid-upload) and paid/
+ * published boats (ringo_process_paid() no longer waits on assets, so these
+ * can go live with photos still in flight) - and flag them so staff notice.
+ * Unpaid drafts are marked 'failed' so they don't sit as an invisible draft
+ * forever; paid/published boats keep their real status and are only logged,
+ * since ringo_process_paid() already handled publishing and notifying.
  */
 function ringo_check_stuck_assets_handler() {
 	global $wpdb;
@@ -39,10 +43,9 @@ function ringo_check_stuck_assets_handler() {
 
 	$ids = $wpdb->get_col( $wpdb->prepare( "
 		SELECT p.ID FROM {$wpdb->posts} p
-		INNER JOIN {$wpdb->postmeta} pending ON pending.post_id = p.ID AND pending.meta_key = '_ringo_publish_pending_assets'
 		INNER JOIN {$wpdb->postmeta} started ON started.post_id = p.ID AND started.meta_key = '_ringo_native_assets_started_at'
-		WHERE p.post_status = 'draft'
-		AND CAST( started.meta_value AS UNSIGNED ) < %d
+		INNER JOIN {$wpdb->postmeta} status  ON status.post_id = p.ID AND status.meta_key = '_ringo_native_assets_status' AND status.meta_value IN ( 'uploading', 'failed' )
+		WHERE CAST( started.meta_value AS UNSIGNED ) < %d
 	", $cutoff ) );
 
 	if ( ! $ids ) {
@@ -52,18 +55,29 @@ function ringo_check_stuck_assets_handler() {
 	foreach ( $ids as $post_id ) {
 		$post_id = (int) $post_id;
 
-		// Race: the finalize AJAX call completed between the query above and here.
+		// Race: the recovery pass above (or the finalize AJAX call) completed
+		// between the query above and here.
 		if ( get_post_meta( $post_id, '_ringo_native_assets_status', true ) === 'complete' ) {
 			continue;
 		}
 
-		// Already flagged on a previous run - don't re-email every 10 minutes.
+		// Already flagged on a previous run - don't re-log every 10 minutes.
 		if ( get_post_meta( $post_id, '_ringo_stuck_assets_notified', true ) ) {
 			continue;
 		}
 
-		ringo_log( 'Native assets stuck - flagging (no email sent)', [ 'post_id' => $post_id ] );
-		update_post_meta( $post_id, '_ringo_native_assets_status', 'failed' );
+		$is_paid = 'paid' === get_post_meta( $post_id, '_ringo_checkout_status', true );
+
+		ringo_log(
+			$is_paid
+				? 'Paid listing has incomplete photos - staff follow-up needed (no customer email sent)'
+				: 'Native assets stuck - flagging (no email sent)',
+			[ 'post_id' => $post_id ]
+		);
+
+		if ( ! $is_paid ) {
+			update_post_meta( $post_id, '_ringo_native_assets_status', 'failed' );
+		}
 		delete_post_meta( $post_id, '_ringo_publish_pending_assets' );
 		update_post_meta( $post_id, '_ringo_stuck_assets_notified', time() );
 	}

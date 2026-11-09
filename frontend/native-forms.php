@@ -3177,7 +3177,19 @@ jQuery(function($){
         return;
       }
 
-      function uploadOne(index) {
+      // Fire an immediate "starting" progress tick so any visible upload
+      // indicator (payment chooser, Stripe/PayPal modal) shows something right
+      // away instead of staying blank until the first image's round trip
+      // finishes - a seller can move past the chooser in just a few seconds,
+      // well before that first response would normally arrive.
+      $(document).trigger('ringo/native-assets-progress', [{
+        doneFiles: 0,
+        totalFiles: totalFiles,
+        percent: 0
+      }]);
+
+      function uploadOne(index, attempt) {
+        attempt = attempt || 1;
         var item = queue[index];
         var seq  = index + 1;
         var itemData = new FormData();
@@ -3226,8 +3238,17 @@ jQuery(function($){
           $(document).trigger('ringo/native-assets-complete', [assetResponse, form]);
           deferred.resolve(assetResponse);
         }).fail(function(xhr, status){
+          // A request-level failure (timeout, dropped connection) is usually a
+          // transient network blip, not a real problem with the photo - retry
+          // the same image once before giving up on it.
+          if (attempt < 2) {
+            console.warn('[RINGO] Background image upload attempt ' + attempt + ' failed (' + status + '), retrying photo ' + seq + ' of ' + totalFiles);
+            $(document).trigger('ringo/native-assets-retry', [{ seq: seq, totalFiles: totalFiles, attempt: attempt }]);
+            window.setTimeout(function(){ uploadOne(index, attempt + 1); }, 3000);
+            return;
+          }
           window.ringoNativeAssetUploadStatus = 'failed';
-          console.error('[RINGO] Background image upload request failed', status);
+          console.error('[RINGO] Background image upload request failed after retry', status);
           $(document).trigger('ringo/native-assets-failed', [xhr, form]);
           deferred.reject(xhr);
         });

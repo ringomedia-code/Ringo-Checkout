@@ -4,7 +4,7 @@ A WordPress plugin for [BassBoat4Sale.com](https://bassboat4sale.com) that handl
 
 | | |
 |---|---|
-| **Version** | 9.7.2 |
+| **Version** | 9.7.3 |
 | **Requires PHP** | 7.4 or newer |
 | **Text domain** | `ringo-checkout` |
 | **Author** | [Ringo Media](https://ringomedia.com/) |
@@ -227,6 +227,39 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 ## Changelog
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
+
+### 9.7.3 (2026-11-10)
+
+Payment confirmation was still getting stuck behind a slow or abandoned photo
+upload, reported by a real seller whose upload spun and timed out mid-listing -
+no confirmation email went out even though the boat should have been marked
+paid immediately. Decouples the two completely, and hardens the upload itself
+so the stuck case is rarer to begin with:
+
+- **`ringo_process_paid()` no longer defers publish/email on incomplete
+  photos.** Previously, if `_ringo_native_assets_status` was `uploading` or
+  `failed` at the moment of payment, publish and both confirmation emails
+  were deferred indefinitely via `ringo_finalize_paid_boat_after_assets()` -
+  a state that can never resolve once the original upload session is gone.
+  Now a paid boat is always published and both emails always sent the moment
+  payment is confirmed, regardless of photo status. An incomplete upload is
+  recorded as `_ringo_assets_incomplete_at_publish` and logged for staff
+  follow-up only - never a customer-facing email, since "two of your photos
+  didn't upload" reads as "the site is broken," not a seller problem to fix.
+- **`stuck-assets-cron.php` now also catches paid/published listings**, not
+  just abandoned unpaid drafts, logging them for staff attention without
+  touching their status (publish/email already happened).
+- **Background image uploads now auto-retry once** on a request-level
+  failure (timeout/dropped connection) before giving up on that photo, with
+  a `ringo/native-assets-retry` event for UI feedback.
+- **A persistent "don't close this page" banner** now shows on every
+  payment-related screen (the chooser, and the Stripe and PayPal modals that
+  replace it) for as long as the background upload is running, including an
+  immediate zero-progress tick the instant upload starts so it's visible even
+  if the seller moves past the chooser in a few seconds.
+- **`beforeunload` warns the browser tab is closing** while photos are still
+  uploading, as an extra deterrent on top of the banner (browsers no longer
+  allow a custom message, only their own built-in prompt).
 
 ### 9.7.2 (2026-11-05)
 

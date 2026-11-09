@@ -456,6 +456,25 @@ jQuery(function($){
     $('#ringoUploadWaitOverlay').remove();
   }
 
+  // ── Pre-payment upload banner ───────────────────────────────────────────────
+  // The upload-wait overlay above only ever shows after payment succeeds. Before
+  // that - while the seller is still looking at the payment chooser - there was
+  // previously zero indication a background photo upload was even happening, so
+  // a stalled/slow upload just looked like nothing was going on. This small,
+  // non-blocking banner lives inside the chooser itself (see showChooserInstant/
+  // showChooser) and reflects the same upload events, without delaying or
+  // disabling the payment buttons in any way.
+
+  function updateUploadIndicatorBanner(html, isWarning) {
+    var $el = $('#ringoUploadIndicator');
+    if (!$el.length) return;
+    $el.css({
+      color: isWarning ? '#8a6d1d' : '#0a6ebd',
+      background: isWarning ? '#fff8e1' : '#eef6fc',
+      borderColor: isWarning ? '#f0dfa6' : '#cfe4f3'
+    }).html(html).show();
+  }
+
   $(document).on('ringo/native-assets-progress', function(e, data){
     // A long background photo upload is legitimate activity, not an idle payment
     // screen - without this, RINGO_STUCK_AFTER_MS below has no way to know the
@@ -464,10 +483,40 @@ jQuery(function($){
     touchPaymentState();
     if (!data) return;
     updateUploadWaitOverlay(data.doneFiles, data.totalFiles, data.percent);
+    updateUploadIndicatorBanner(
+      '<span style="display:inline-block;width:10px;height:10px;border:2px solid #cfe4f3;border-top-color:#0a6ebd;border-radius:50%;animation:ringoSpinAnimation .8s linear infinite;vertical-align:middle;margin-right:6px;"></span>' +
+      'Uploading your photos (' + data.doneFiles + ' of ' + data.totalFiles + ') — please don\'t close this page yet.'
+    );
   });
 
   $(document).on('ringo/native-assets-complete', function(){
     touchPaymentState();
+    $('#ringoUploadIndicator').fadeOut(300);
+  });
+
+  $(document).on('ringo/native-assets-retry', function(e, data){
+    touchPaymentState();
+    if (!data) return;
+    updateUploadIndicatorBanner('Still working on photo ' + data.seq + ' of ' + data.totalFiles + ' — hang tight...');
+  });
+
+  $(document).on('ringo/native-assets-failed', function(){
+    // Deliberately reassuring, not alarming - the listing still goes through
+    // either way (payment/publish never waits on photos), so this is never
+    // "something is broken," just "we'll follow up on the rest internally."
+    updateUploadIndicatorBanner('Still finishing up in the background — you\'re all set, no action needed from you.', true);
+  });
+
+  // While a background upload is genuinely in progress, nudge the seller not to
+  // close the tab. Browsers no longer allow a custom message (shown text is
+  // fixed by the browser), and this can never truly block a close - just a
+  // real deterrent where previously there was none at all.
+  $(window).on('beforeunload', function(e){
+    if (window.ringoNativeAssetUploadStatus === 'uploading') {
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
   });
 
   function redirectAfterNativeAssets(url) {
@@ -768,6 +817,7 @@ jQuery(function($){
           '<button type="button" id="ringoPayCard" style="flex:1;min-width:130px;padding:12px;border:1px solid #0a6ebd;background:#0a6ebd;color:#fff;border-radius:6px;cursor:pointer;font-size:14px;">Credit / Debit Card</button>' +
           '<button type="button" id="ringoPayPaypal" style="flex:1;min-width:130px;padding:12px;border:1px solid #333;background:#fff;color:#111;border-radius:6px;cursor:pointer;font-size:14px;">PayPal</button>' +
         '</div>' +
+        '<div id="ringoUploadIndicator" style="display:none;margin:12px 0 0 0;padding:8px 10px;border-radius:6px;font-size:13px;"></div>' +
         '<p style="margin:12px 0 0 0;font-size:12px;color:#666;">Do not refresh while payment is processing.</p>' +
       '</div>' +
     '</div>';
@@ -876,6 +926,7 @@ jQuery(function($){
           '<button type="button" id="ringoPayCard" style="flex:1;min-width:130px;padding:12px;border:1px solid #0a6ebd;background:#0a6ebd;color:#fff;border-radius:6px;cursor:pointer;font-size:14px;">Credit / Debit Card</button>' +
           '<button type="button" id="ringoPayPaypal" style="flex:1;min-width:130px;padding:12px;border:1px solid #333;background:#fff;color:#111;border-radius:6px;cursor:pointer;font-size:14px;">PayPal</button>' +
         '</div>' +
+        '<div id="ringoUploadIndicator" style="display:none;margin:12px 0 0 0;padding:8px 10px;border-radius:6px;font-size:13px;"></div>' +
         '<p style="margin:12px 0 0 0;font-size:12px;color:#666;">Do not refresh while payment is processing.</p>' +
       '</div>' +
     '</div>';
@@ -969,6 +1020,7 @@ jQuery(function($){
         '<div id="ringoStripeMsg" style="display:none;margin:0 0 12px 0;padding:10px;border-radius:6px;background:#fff3cd;border:1px solid #ffeeba;color:#856404;font-size:13px;"></div>' +
         '<button type="button" id="ringoStripePayBtn" style="width:100%;padding:12px;border:1px solid #0a6ebd;background:#0a6ebd;color:#fff;border-radius:6px;cursor:pointer;font-size:14px;font-weight:700;">Pay ' + formatMoney(ctx.packagePrice) + '</button>' +
         '<button type="button" id="ringoStripeBack" style="width:100%;margin-top:8px;padding:10px;border:1px solid #333;background:#fff;color:#111;border-radius:6px;cursor:pointer;">← Back</button>' +
+        '<div id="ringoUploadIndicator" style="display:none;margin:12px 0 0 0;padding:8px 10px;border-radius:6px;font-size:13px;"></div>' +
         '<p style="margin:12px 0 0 0;font-size:12px;color:#d32f2f;font-weight:bold;">⚠️ Do not refresh or close this window!</p>' +
       '</div>' +
     '</div>';
@@ -1177,6 +1229,7 @@ jQuery(function($){
           '<div style="flex:1;min-width:240px;max-height:80vh;overflow-y:auto;padding-right:4px;">' +
             '<div id="ringoPayPalMsg" style="display:none;margin:0 0 10px 0;padding:10px;border-radius:6px;background:#fff3cd;border:1px solid #ffeeba;color:#856404;font-size:13px;"></div>' +
             '<div id="paypal-button-container"></div>' +
+            '<div id="ringoUploadIndicator" style="display:none;margin:12px 0 0 0;padding:8px 10px;border-radius:6px;font-size:13px;"></div>' +
             '<p style="margin:12px 0 0 0;font-size:12px;color:#d32f2f;font-weight:bold;">⚠️ Do not refresh or close this window!</p>' +
           '</div>' +
         '</div>' +
