@@ -184,10 +184,15 @@ function ringo_process_paid( $post_id, $provider, $provider_id, $package_name, $
 		}
 	}
 
-	$asset_status  = (string) get_post_meta( $post_id, '_ringo_native_assets_status', true );
-	$defer_publish = in_array( $asset_status, [ 'uploading', 'failed' ], true );
+	// Payment confirmation is intentionally never blocked on the background
+	// photo upload finishing - a boat gets marked paid, published, and
+	// notified immediately no matter how many images have landed so far.
+	// Incomplete photos are only ever flagged internally below (for staff
+	// follow-up); they never delay or skip the paid/publish/email flow.
+	$asset_status      = (string) get_post_meta( $post_id, '_ringo_native_assets_status', true );
+	$assets_incomplete = in_array( $asset_status, [ 'uploading', 'failed' ], true );
 
-	if ( $post->post_status === 'draft' && ! $defer_publish ) {
+	if ( $post->post_status === 'draft' ) {
 		ringo_prepare_boat_meta_for_publish( $post_id );
 
 		try {
@@ -256,13 +261,18 @@ function ringo_process_paid( $post_id, $provider, $provider_id, $package_name, $
 		update_post_meta( $post_id, '_ringo_coupon_counted', 1 );
 	}
 
-	if ( $defer_publish ) {
-		update_post_meta( $post_id, '_ringo_publish_pending_assets', 1 );
-		if ( ! wp_next_scheduled( 'ringo_finalize_paid_boat_after_assets', [ (int) $post_id ] ) ) {
-			wp_schedule_single_event( time() + 15, 'ringo_finalize_paid_boat_after_assets', [ (int) $post_id ] );
-		}
-		ringo_log( 'Paid boat publish deferred until background images finish', [ 'post_id' => (int) $post_id, 'asset_status' => $asset_status ] );
-		return true;
+	// Internal-only visibility when photos aren't fully in yet: no customer
+	// email, no blocked publish - just a flag/log line for staff to notice and
+	// follow up directly with the seller if needed. ringo_check_stuck_assets_handler()
+	// (stuck-assets-cron.php) picks this up on its next 10-minute run too.
+	if ( $assets_incomplete ) {
+		update_post_meta( $post_id, '_ringo_assets_incomplete_at_publish', $asset_status );
+		ringo_log( 'Boat marked paid with incomplete photo upload - staff follow-up needed (no customer email sent)', [
+			'post_id'      => (int) $post_id,
+			'asset_status' => $asset_status,
+		] );
+	} else {
+		delete_post_meta( $post_id, '_ringo_assets_incomplete_at_publish' );
 	}
 
 	delete_post_meta( $post_id, '_ringo_publish_pending_assets' );
