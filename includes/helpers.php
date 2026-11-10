@@ -13,12 +13,23 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 if ( ! function_exists( 'ringo_log' ) ) {
 	/**
-	 * Write a prefixed line to the PHP error log.
+	 * Write a prefixed line to the PHP error log and persist it to the DB log
+	 * the admin can review (Email Logs or Boat Logs, depending on $type).
+	 *
+	 * Boat-activity logging (submissions, edits, background uploads, cron
+	 * runs, payment/draft state) used to share the same `ringo_email_logs`
+	 * option and page as genuine email send/fail records - high-frequency
+	 * boat activity (a 10-minute cron heartbeat alone) crowded out real email
+	 * delivery failures within the 200-entry cap well before anyone noticed
+	 * a problem. Use ringo_log_email() (or pass $type = 'email' directly) for
+	 * anything that is actually about sending, skipping, or failing to send
+	 * an email; everything else defaults to the boat-activity log.
 	 *
 	 * @param string     $message Human-readable label.
 	 * @param mixed|null $data    Optional context (array, object, or scalar).
+	 * @param string     $type    'boat' (default) or 'email'.
 	 */
-	function ringo_log( $message, $data = null ) {
+	function ringo_log( $message, $data = null, $type = 'boat' ) {
 		$line = '🧾 [Ringo Pay] ' . $message;
 		if ( null !== $data ) {
 			$line .= ' | ' . ( is_array( $data ) || is_object( $data )
@@ -32,16 +43,31 @@ if ( ! function_exists( 'ringo_log' ) ) {
 			error_log( $line );
 		}
 
-		// Persist to DB so the admin Email Logs page can display entries.
+		// Persist to DB so the admin Email Logs / Boat Logs page can display entries.
 		$entry = [
 			'time'    => current_time( 'mysql' ),
 			'message' => $message,
 			'data'    => $data,
 		];
-		$logs = get_option( 'ringo_email_logs', [] );
+		$option_key = ( 'email' === $type ) ? 'ringo_email_logs' : 'ringo_boat_logs';
+		$logs       = get_option( $option_key, [] );
 		array_unshift( $logs, $entry );         // newest first
 		$logs = array_slice( $logs, 0, 200 );   // cap at 200 entries
-		update_option( 'ringo_email_logs', $logs, false );
+		update_option( $option_key, $logs, false );
+	}
+}
+
+if ( ! function_exists( 'ringo_log_email' ) ) {
+	/**
+	 * Same as ringo_log(), but always logs to the Email Logs page. Use this
+	 * (instead of passing $type directly) for anything that is specifically
+	 * about sending, skipping, or failing to send an email.
+	 *
+	 * @param string     $message Human-readable label.
+	 * @param mixed|null $data    Optional context (array, object, or scalar).
+	 */
+	function ringo_log_email( $message, $data = null ) {
+		ringo_log( $message, $data, 'email' );
 	}
 }
 

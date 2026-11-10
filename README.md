@@ -4,7 +4,7 @@ A WordPress plugin for [BassBoat4Sale.com](https://bassboat4sale.com) that handl
 
 | | |
 |---|---|
-| **Version** | 9.7.3 |
+| **Version** | 9.7.4 |
 | **Requires PHP** | 7.4 or newer |
 | **Text domain** | `ringo-checkout` |
 | **Author** | [Ringo Media](https://ringomedia.com/) |
@@ -227,6 +227,11 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 ## Changelog
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
+
+### 9.7.4 (2026-11-11)
+
+- **New "Boat Logs" admin page**, separate from Email Logs. `ringo_log()` used to write every boat-activity event (submissions, edits, background uploads, cron runs, payment/draft state) into the same option and page as actual email send/fail records. High-frequency boat activity - a 10-minute cron heartbeat alone - crowded real email failures out of the 200-entry cap well before anyone would notice a delivery problem. Email Logs is now only ever genuine `wp_mail()` send/skip/fail records; everything else now goes to the new Boat Logs page.
+- No data migration: existing mixed entries already in Email Logs stay where they are and will age out naturally; new entries go to the correct page from this version on.
 
 ### 9.7.3 (2026-11-10)
 

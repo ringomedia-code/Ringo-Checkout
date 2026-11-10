@@ -65,6 +65,16 @@ function ringo_register_admin_menus() {
 		'ringo_render_logs_page'
 	);
 
+	// "Boat Logs" subpage.
+	add_submenu_page(
+		'ringo-stripe-payments',
+		'Boat Logs',
+		'Boat Logs',
+		'manage_options',
+		'ringo-boat-logs',
+		'ringo_render_boat_logs_page'
+	);
+
 	// "Coupons" subpage.
 	add_submenu_page(
 		'ringo-stripe-payments',

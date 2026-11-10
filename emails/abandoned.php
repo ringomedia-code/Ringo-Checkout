@@ -23,7 +23,7 @@ function ringo_capture_mail_error( $wp_error ) {
 	if ( ! is_wp_error( $wp_error ) ) {
 		return;
 	}
-	ringo_log( 'wp_mail FAILED', [
+	ringo_log_email( 'wp_mail FAILED', [
 		'code'    => $wp_error->get_error_code(),
 		'message' => $wp_error->get_error_message(),
 		'data'    => $wp_error->get_error_data(),
@@ -51,7 +51,7 @@ function ringo_send_mail( $label, $to, $subject, $html, $extra_headers = [], $po
 
 	$sent = wp_mail( $to, $subject, $html, $headers );
 
-	ringo_log( $label . ( $sent ? ': sent OK' : ': FAILED' ), [
+	ringo_log_email( $label . ( $sent ? ': sent OK' : ': FAILED' ), [
 		'to'      => $to,
 		'subject' => $subject,
 		'post_id' => $post_id,
@@ -71,12 +71,12 @@ function ringo_send_mail( $label, $to, $subject, $html, $extra_headers = [], $po
 function ringo_send_payment_pending_customer_email( $post_id ) {
 	$to = ringo_get_form_email( $post_id );
 	if ( ! $to ) {
-		ringo_log( 'Customer abandoned email: no email address found, skipping', $post_id );
+		ringo_log_email( 'Customer abandoned email: no email address found, skipping', $post_id );
 		return false;
 	}
 
 	if ( get_post_meta( $post_id, '_ringo_pending_email_sent', true ) ) {
-		ringo_log( 'Customer abandoned email: already sent, skipping', $post_id );
+		ringo_log_email( 'Customer abandoned email: already sent, skipping', $post_id );
 		return true;
 	}
 
@@ -146,7 +146,7 @@ function ringo_send_payment_pending_admin_email( $post_id ) {
 	$to = get_option( 'admin_email' );
 
 	if ( get_post_meta( $post_id, '_ringo_pending_admin_email_sent', true ) ) {
-		ringo_log( 'Admin abandoned email: already sent, skipping', $post_id );
+		ringo_log_email( 'Admin abandoned email: already sent, skipping', $post_id );
 		return true;
 	}
 
@@ -224,7 +224,7 @@ function ringo_send_admin_new_draft_email( $post_id ) {
 	$to = get_option( 'admin_email' );
 
 	if ( get_post_meta( $post_id, '_ringo_new_draft_admin_email_sent', true ) ) {
-		ringo_log( 'Admin new-draft email: already sent, skipping', $post_id );
+		ringo_log_email( 'Admin new-draft email: already sent, skipping', $post_id );
 		return true;
 	}
 
@@ -367,13 +367,13 @@ function ringo_get_payment_failed_copy( $condition ) {
 function ringo_send_payment_failed_customer_email( $post_id, $condition = '', $error_message = '' ) {
 	$to = ringo_get_form_email( $post_id );
 	if ( ! $to ) {
-		ringo_log( 'Payment failed customer email: no email address found, skipping', $post_id );
+		ringo_log_email( 'Payment failed customer email: no email address found, skipping', $post_id );
 		return false;
 	}
 
 	// Check if we've already sent a payment_failed email for this post
 	if ( get_post_meta( $post_id, '_ringo_payment_failed_email_sent', true ) ) {
-		ringo_log( 'Payment failed customer email: already sent, skipping', $post_id );
+		ringo_log_email( 'Payment failed customer email: already sent, skipping', $post_id );
 		return true;
 	}
 
@@ -465,7 +465,7 @@ function ringo_send_payment_failed_admin_email( $post_id, $condition = '', $erro
 	$to = get_option( 'admin_email' );
 
 	if ( get_post_meta( $post_id, '_ringo_payment_failed_admin_email_sent', true ) ) {
-		ringo_log( 'Payment failed admin email: already sent, skipping', $post_id );
+		ringo_log_email( 'Payment failed admin email: already sent, skipping', $post_id );
 		return true;
 	}
 
