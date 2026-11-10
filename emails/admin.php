@@ -22,12 +22,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 function ringo_send_admin_listing_email( $post_id, $package_name, $package_price ) {
 	$post = get_post( $post_id );
 	if ( ! $post ) {
-		ringo_log( 'Admin email: post not found', $post_id );
+		ringo_log_email( 'Admin email: post not found', $post_id );
 		return false;
 	}
 
 	if ( get_post_meta( $post_id, '_ringo_admin_email_sent', true ) ) {
-		ringo_log( 'Admin email: already sent, skipping', $post_id );
+		ringo_log_email( 'Admin email: already sent, skipping', $post_id );
 		return true;
 	}
 
@@ -234,7 +234,7 @@ function ringo_send_admin_listing_email( $post_id, $package_name, $package_price
 
 	$sent = wp_mail( $to, $subject, $html, $headers );
 
-	ringo_log( 'Admin email: wp_mail result', [
+	ringo_log_email( 'Admin email: wp_mail result', [
 		'sent'     => (bool) $sent,
 		'to'       => $to,
 		'reply_to' => $reply_to,
@@ -378,7 +378,7 @@ function ringo_send_admin_edit_email( $post_id ) {
 	}
 
 	$sent = wp_mail( $to, $subject, $body, $headers );
-	ringo_log( 'Native edit admin email', [ 'post_id' => $post_id, 'sent' => (bool) $sent, 'recipient' => $to ] );
+	ringo_log_email( 'Native edit admin email', [ 'post_id' => $post_id, 'sent' => (bool) $sent, 'recipient' => $to ] );
 
 	return (bool) $sent;
 }
