@@ -373,7 +373,11 @@ function ringo_payment_safety_admin_notice() {
 	if ( $live_in_db ) {
 		echo '<div class="notice notice-error"><p><strong>Ringo Checkout:</strong> live payment secrets are stored in this non production database (';
 		echo esc_html( implode( ', ', $live_in_db ) );
-		echo '). They are not used here, but anyone who can read this database can read them. Clear them under Ringo Custom Checkout &gt; Settings.</p></div>';
+		echo '). They are not used here, but anyone who can read this database can read them. ';
+		printf(
+			'<a href="%s">Clear them on the Settings page</a> (tick "Clear this saved key" on each Live row, enter the email code, save).</p></div>',
+			esc_url( admin_url( 'admin.php?page=ringo-stripe-checkout' ) )
+		);
 	}
 }
 add_action( 'admin_notices', 'ringo_payment_safety_admin_notice' );

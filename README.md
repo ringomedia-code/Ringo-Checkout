@@ -168,7 +168,9 @@ On a site that is **not production**, the plugin never uses live keys: Stripe
 is forced to Test, PayPal to Sandbox, a live looking Stripe key (`sk_live_`,
 `rk_live_`, `pk_live_`) is refused even in a test field, new live keys are not
 saved, and administrators see a notice (plus an error notice when live secrets
-are still stored in that database).
+are still stored in that database, linking to the settings page). There the
+Live rows stay visible, read-only, each with a **Clear this saved key** box
+(clearing needs the email code).
 
 A site is not production when any of these is true:
 

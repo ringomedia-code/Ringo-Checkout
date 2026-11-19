@@ -170,6 +170,22 @@ function ringo_render_credential_field( $field, $hint = '' ) {
 				esc_attr( $name )
 			);
 			$notes[] = 'Set in wp-config (locked): <code>' . esc_html( $const ) . '</code>, ends in ' . esc_html( ringo_mask_secret( $cred['value'] ) ) . '.';
+		} elseif ( in_array( $field, ringo_live_credential_fields(), true ) && ! ringo_is_production_site() ) {
+			// Off production a live secret can only be cleared, never entered.
+			// The name stays on the (disabled) input so the row can be found.
+			printf(
+				'<input type="password" name="%s" value="" class="regular-text ringo-live-locked" disabled="disabled" placeholder="Live keys cannot be entered on this site" />',
+				esc_attr( $name )
+			);
+			if ( '' !== $cred['value'] ) {
+				$notes[] = '<strong>A live key is stored here</strong>, ends in ' . esc_html( ringo_mask_secret( $cred['value'] ) ) . '.';
+				$notes[] = sprintf(
+					'<label><input type="checkbox" name="ringo_stripe_settings[clear][%s]" value="1" /> Clear this saved key</label> (needs the email code)',
+					esc_attr( $field )
+				);
+			} else {
+				$notes[] = 'Not set.';
+			}
 		} else {
 			printf(
 				'<input type="password" autocomplete="new-password" name="%s" value="" class="regular-text" placeholder="%s" />',
@@ -333,6 +349,9 @@ function ringo_render_settings_page() {
 
 	<script>
 	(function () {
+		// Off production the Live rows stay visible so leftover live secrets
+		// can be cleared (the mode is forced to Test/Sandbox there).
+		var keepLiveRows = <?php echo ringo_is_production_site() ? 'false' : 'true'; ?>;
 		function closestRow(el) {
 			return el ? el.closest('tr') : null;
 		}
@@ -350,7 +369,7 @@ function ringo_render_settings_page() {
 
 			hideFieldSelectors.forEach(function (qs) {
 				var row = closestRow(document.querySelector(qs));
-				if (row) row.style.display = isShow ? 'none' : '';
+				if (row) row.style.display = (isShow && !keepLiveRows) ? 'none' : '';
 			});
 		}
 

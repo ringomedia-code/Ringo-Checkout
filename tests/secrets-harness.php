@@ -30,7 +30,7 @@ $scenarios = [
 	'logger_redacts', 'staging_notice', 'autoload_off',
 	'otp_no_constant', 'otp_blocks_and_sends', 'otp_valid_code', 'otp_single_use', 'otp_wrong_tries',
 	'otp_expired', 'otp_session_bound', 'otp_rate_limit', 'otp_protected_fields', 'otp_page_field',
-	'alert_email', 'alert_add_option',
+	'alert_email', 'alert_add_option', 'staging_clear_live_secrets',
 ];
 
 if ( isset( $argv[1] ) && '--list' === $argv[1] ) {
@@ -133,6 +133,10 @@ function admin_url( $p = '' ) { return 'https://site.example/wp-admin/' . $p; }
 function wp_nonce_url( $u, $a ) { return $u . '&_wpnonce=n'; }
 function esc_url( $u ) { return $u; }
 function add_query_arg( $k, $v, $u ) { return $u . '&' . $k . '=' . $v; }
+function settings_fields( $g ) {}
+function do_settings_sections( $p ) {}
+function submit_button( $t ) {}
+function settings_errors( $s ) {}
 function wp_set_option_autoload( $k, $on ) { $GLOBALS['W']['autoload'][ $k ] = (bool) $on; $GLOBALS['W']['autoload_calls']++; return true; }
 
 // ─── Assertions ──────────────────────────────────────────────────────────────
@@ -592,6 +596,41 @@ switch ( $SCENARIO ) {
 		ringo_payment_settings_changed( [], [ 'stripe_live_secret' => $K['sk_live'] ] );
 		ok( false !== strpos( last_mail()['body'], 'ends in ••••L1VE' ), 'first save alerted, last 4 only' );
 		no_secret_in( all_mail_text(), 'first save alert' );
+		break;
+
+	case 'staging_clear_live_secrets': // Mo's staging4 test 11-19: live rows must stay reachable.
+		define( 'RINGO_PAYMENT_OTP_EMAIL', OTP_TO );
+		$GLOBALS['W']['home'] = 'https://staging4.bassboat4sale.example';
+		load_plugin();
+		full_db( 'test', 'sandbox' );
+		$page = capture( 'ringo_render_settings_page' );
+		ok( false !== strpos( $page, 'var keepLiveRows = true;' ), 'JS keeps Live rows visible off production' );
+		$html = capture( function () { ringo_field_live_key(); ringo_field_paypal_live_secret(); } );
+		no_secret_in( $html, 'live rows on staging' );
+		ok( false !== strpos( $html, '[clear][stripe_live_secret]' ) && false !== strpos( $html, '[clear][paypal_live_secret]' ), 'Clear box on both live secrets' );
+		same( substr_count( $html, 'ringo-live-locked" disabled="disabled"' ), 2, 'live secret inputs read-only' );
+		ok( false !== strpos( $html, 'ends in ••••L1VE' ) && false !== strpos( $html, 'ends in ••••PPL1' ), 'last 4 shown' );
+		$notice = capture( 'ringo_payment_safety_admin_notice' );
+		ok( false !== strpos( $notice, 'page=ringo-stripe-checkout' ), 'red notice links to the Clear boxes' );
+		// What the browser submits: disabled inputs are not sent, only the Clear boxes.
+		$post = [ 'mode' => 'test', 'paypal_mode' => 'sandbox', 'stripe_test_publishable' => $K['pk_test'], 'stripe_live_publishable' => $K['pk_live'],
+			'paypal_sandbox_client_id' => $K['pp_sbx_id'], 'paypal_live_client_id' => $K['pp_live_id'],
+			'clear' => [ 'stripe_live_secret' => '1', 'paypal_live_secret' => '1' ] ];
+		$out = ringo_sanitize_settings( $post );
+		same( $out['stripe_live_secret'], $K['sk_live'], 'clear without code refused' );
+		same( $out['paypal_live_secret'], $K['pp_live_sec'], 'PayPal clear without code refused' );
+		$out = ringo_sanitize_settings( array_merge( $post, [ 'otp_code' => code_from_mail() ] ) );
+		same( $out['stripe_live_secret'], '', 'live Stripe secret cleared with code' );
+		same( $out['paypal_live_secret'], '', 'live PayPal secret cleared with code' );
+		same( $out['stripe_test_secret'], $K['sk_test'], 'test secret untouched' );
+		db( $out );
+		same( capture( function () { ringo_payment_safety_admin_notice(); } ) === $notice, false, 'notice changes after clearing' );
+		ok( false === strpos( capture( 'ringo_payment_safety_admin_notice' ), 'notice-error' ), 'red notice gone' );
+		// Production is unchanged: rows toggle as before, live input editable.
+		$GLOBALS['W']['home'] = 'https://bassboat4sale.example';
+		full_db();
+		ok( false !== strpos( capture( 'ringo_render_settings_page' ), 'var keepLiveRows = false;' ), 'production keeps the old toggle' );
+		ok( false === strpos( capture( 'ringo_field_live_key' ), 'disabled' ), 'production live input editable' );
 		break;
 
 	default:
