@@ -36,22 +36,24 @@ function ringo_load_stripe_sdk() {
 /**
  * Return the currently active Stripe secret key.
  *
- * Falls back to the legacy RINGO_STRIPE_SECRET_KEY constant if keys are not
- * yet configured via the settings page.
+ * Order: RINGO_STRIPE_{LIVE|TEST}_SECRET constant, then the saved setting,
+ * then the legacy RINGO_STRIPE_SECRET_KEY constant. Off production the mode
+ * is always test and a live key is never returned (see includes/secrets.php).
  *
  * @return string
  */
 function ringo_get_active_stripe_secret() {
-	$s = ringo_get_settings();
+	$field = ( 'live' === ringo_get_effective_stripe_mode() ) ? 'stripe_live_secret' : 'stripe_test_secret';
+	$key   = ringo_get_usable_credential( $field );
+	if ( '' !== $key ) {
+		return $key;
+	}
 
-	if ( $s['mode'] === 'live' && ! empty( $s['stripe_live_secret'] ) ) {
-		return $s['stripe_live_secret'];
-	}
-	if ( $s['mode'] === 'test' && ! empty( $s['stripe_test_secret'] ) ) {
-		return $s['stripe_test_secret'];
-	}
 	if ( defined( 'RINGO_STRIPE_SECRET_KEY' ) && RINGO_STRIPE_SECRET_KEY ) {
-		return RINGO_STRIPE_SECRET_KEY;
+		$legacy = trim( (string) RINGO_STRIPE_SECRET_KEY );
+		if ( ringo_is_production_site() || ! ringo_is_live_stripe_key( $legacy ) ) {
+			return $legacy;
+		}
 	}
 
 	return '';
@@ -60,19 +62,22 @@ function ringo_get_active_stripe_secret() {
 /**
  * Return the currently active Stripe publishable key.
  *
+ * Same order and staging guard as the secret key.
+ *
  * @return string
  */
 function ringo_get_active_stripe_publishable() {
-	$s = ringo_get_settings();
+	$field = ( 'live' === ringo_get_effective_stripe_mode() ) ? 'stripe_live_publishable' : 'stripe_test_publishable';
+	$key   = ringo_get_usable_credential( $field );
+	if ( '' !== $key ) {
+		return $key;
+	}
 
-	if ( $s['mode'] === 'live' && ! empty( $s['stripe_live_publishable'] ) ) {
-		return $s['stripe_live_publishable'];
-	}
-	if ( $s['mode'] === 'test' && ! empty( $s['stripe_test_publishable'] ) ) {
-		return $s['stripe_test_publishable'];
-	}
 	if ( defined( 'RINGO_STRIPE_PUBLISHABLE_KEY' ) && RINGO_STRIPE_PUBLISHABLE_KEY ) {
-		return RINGO_STRIPE_PUBLISHABLE_KEY;
+		$legacy = trim( (string) RINGO_STRIPE_PUBLISHABLE_KEY );
+		if ( ringo_is_production_site() || ! ringo_is_live_stripe_key( $legacy ) ) {
+			return $legacy;
+		}
 	}
 
 	return '';

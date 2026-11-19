@@ -221,6 +221,11 @@ function ringo_get_draft_failure_recipients( $post_id ) {
  * @return bool True when at least one recipient was sent or already sent.
  */
 function ringo_send_draft_failure_notification_email( $post_id, $condition, $message = '', $context = [] ) {
+	// Gateway error text and browser reports land in this email: scrub secrets.
+	if ( function_exists( 'ringo_redact_secrets' ) ) {
+		$message = ringo_redact_secrets( (string) $message );
+		$context = ringo_redact_secrets( $context );
+	}
 	$attempt_id = (string) get_post_meta( $post_id, '_ringo_payment_attempt_id', true );
 	if ( ! $attempt_id ) {
 		$attempt_id = 'legacy-' . (int) get_post_meta( $post_id, '_ringo_unpaid_time', true );
@@ -333,6 +338,10 @@ function ringo_record_draft_failure( $post_id, $condition, $message = '', $conte
 	$post_id   = (int) $post_id;
 	$condition = sanitize_key( (string) $condition );
 	$message   = sanitize_text_field( (string) $message );
+	if ( function_exists( 'ringo_redact_secrets' ) ) {
+		$message = ringo_redact_secrets( $message );
+		$context = ringo_redact_secrets( $context );
+	}
 	$post      = get_post( $post_id );
 
 	if ( ! $post || ! ringo_is_boat_post_type( $post->post_type ) ) {

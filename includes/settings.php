@@ -95,6 +95,16 @@ function ringo_sanitize_settings( $input ) {
 
 	$out['mode'] = ( isset( $input['mode'] ) && $input['mode'] === 'live' ) ? 'live' : 'test';
 
+	// Credentials. The settings page never sends a stored secret back to the
+	// browser, so an empty secret field means "keep what is saved"; the
+	// "clear" checkbox is the only way to blank one. See includes/secrets.php.
+	$stored  = get_option( 'ringo_stripe_settings', [] );
+	$stored  = is_array( $stored ) ? $stored : [];
+	$clear   = ( isset( $input['clear'] ) && is_array( $input['clear'] ) ) ? $input['clear'] : [];
+	$is_prod = function_exists( 'ringo_is_production_site' ) ? ringo_is_production_site() : true;
+	$secrets = function_exists( 'ringo_secret_fields' ) ? ringo_secret_fields() : [];
+	$live    = function_exists( 'ringo_live_credential_fields' ) ? ringo_live_credential_fields() : [];
+
 	foreach (
 		[
 			'stripe_test_secret',
@@ -107,7 +117,34 @@ function ringo_sanitize_settings( $input ) {
 			'paypal_live_secret',
 		] as $field
 	) {
-		$out[ $field ] = isset( $input[ $field ] ) ? sanitize_text_field( $input[ $field ] ) : '';
+		$old       = isset( $stored[ $field ] ) ? (string) $stored[ $field ] : '';
+		$submitted = isset( $input[ $field ] ) ? trim( sanitize_text_field( (string) $input[ $field ] ) ) : '';
+
+		if ( ! empty( $clear[ $field ] ) ) {
+			$out[ $field ] = '';
+			continue;
+		}
+
+		// A new live value is never saved on a non production site.
+		$new_is_live = in_array( $field, $live, true )
+			|| ( 0 === strpos( $field, 'stripe_' ) && function_exists( 'ringo_is_live_stripe_key' ) && ringo_is_live_stripe_key( $submitted ) );
+		if ( '' !== $submitted && ! $is_prod && $new_is_live && $submitted !== $old ) {
+			if ( function_exists( 'add_settings_error' ) ) {
+				add_settings_error( 'ringo_stripe_settings', 'ringo_live_refused_' . $field, 'Not saved: live keys cannot be stored on a non production site (' . $field . ').' );
+			}
+			$out[ $field ] = $old;
+			continue;
+		}
+
+		if ( in_array( $field, $secrets, true ) ) {
+			$out[ $field ] = ( '' !== $submitted ) ? $submitted : $old;
+		} else {
+			// Client IDs and publishable keys are not secret and are shown in the
+			// form, so the submitted value is the value. A field locked by a
+			// constant is disabled (not submitted): keep what is stored.
+			$locked        = function_exists( 'ringo_credential_constant_in_use' ) && ringo_credential_constant_in_use( $field );
+			$out[ $field ] = ( $locked && ! isset( $input[ $field ] ) ) ? $old : $submitted;
+		}
 	}
 
 	$out['paypal_mode'] = ( isset( $input['paypal_mode'] ) && $input['paypal_mode'] === 'live' ) ? 'live' : 'sandbox';

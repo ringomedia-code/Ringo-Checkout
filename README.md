@@ -69,29 +69,119 @@ Open **Ringo Custom Checkout > Settings**. Settings are saved in the `ringo_stri
 | Setting | Notes |
 |---|---|
 | Mode | `test` or `live`. New installs start in **test**. |
-| Stripe keys | Test and live secret and publishable keys. |
+| Stripe keys | Test and live secret and publishable keys. Better as constants, see below. |
 | PayPal | `sandbox` or `live` mode, with a client ID and secret for each. |
 | Package prices | Defaults: Standard 59.99, Featured 79.99, VIP 225.99, Pro 225.99. |
 | Package descriptions | Shown on the checkout. |
 | Abandoned after | Seconds before an unpaid checkout counts as abandoned. Default 360 (6 minutes). |
 
-**Keep live mode on live and test mode everywhere else.** Settings are stored in each site's database, so a staging site does not inherit the live site's mode or keys.
+**Keep live mode on live and test mode everywhere else.** Settings are stored in the site's database, so a staging site made by copying the live database DOES get the live mode and any keys saved there. That is why keys belong in constants and why non production sites are forced to test mode (see below).
 
-### Keys in `wp-config.php` (optional)
+### Payment keys: constants first
 
-Stripe keys may be supplied as constants. They are used when keys are not saved in settings:
+Keys are best kept out of the database. A database copied to a staging site
+(or read by malware) then carries no live keys. Each key can be set as a
+constant, and **a constant always wins over the settings page**:
+
+| Constant | Replaces setting |
+|---|---|
+| `RINGO_STRIPE_LIVE_SECRET` | Stripe live secret key |
+| `RINGO_STRIPE_TEST_SECRET` | Stripe test secret key |
+| `RINGO_STRIPE_LIVE_PUBLISHABLE` | Stripe live publishable key |
+| `RINGO_STRIPE_TEST_PUBLISHABLE` | Stripe test publishable key |
+| `RINGO_PAYPAL_LIVE_CLIENT_ID` / `RINGO_PAYPAL_LIVE_SECRET` | PayPal live app |
+| `RINGO_PAYPAL_SANDBOX_CLIENT_ID` / `RINGO_PAYPAL_SANDBOX_SECRET` | PayPal sandbox app |
+| `RINGO_PRODUCTION_HOSTS` | Comma list of hosts allowed to use live keys (see below) |
+
+The older `RINGO_STRIPE_SECRET_KEY` and `RINGO_STRIPE_PUBLISHABLE_KEY` still
+work as before: used when no key for the active mode is set.
+
+**Setup (recommended):** keep the constants in a file one folder above
+`public_html`, so it is never served by the web server and is not inside the
+folder a staging copy is made from. Copy
+[`examples/ringo-payment-keys.example.php`](examples/ringo-payment-keys.example.php)
+to the server as `ringo-payment-keys.php`, fill it in, `chmod 600` it, and add
+this to `wp-config.php` above the line `/* That's all, stop editing! */`:
 
 ```php
-define( 'RINGO_STRIPE_SECRET_KEY',      'sk_...' );
-define( 'RINGO_STRIPE_PUBLISHABLE_KEY', 'pk_...' );
+$ringo_keys = __DIR__ . '/../ringo-payment-keys.php';
+if ( is_readable( $ringo_keys ) ) {
+	require_once $ringo_keys;
+}
 ```
 
-Other optional constants:
+Then clear the keys on the settings page (tick **Clear this saved key**) so the
+database no longer holds them. A field set by a constant shows
+**Set in wp-config (locked)**.
+
+Limits: this keeps keys out of the database, out of database copies and off
+the admin screen. Code running as the same hosting user (for example malware
+on a staging site hosted under the same account) can still read files that
+user can read, so also keep staging on a separate account where possible, use
+restricted keys, and roll keys after any compromise.
+
+### The settings page never shows a secret
+
+Secret fields are password inputs with an empty value. They show
+**Saved, ends in ••••1234** or **Not set**. Leaving a secret field empty on
+save keeps the saved key; to remove one, tick **Clear this saved key**.
+Client IDs and publishable keys are public and shown as before.
+
+### Staging safety
+
+On a site that is **not production**, the plugin never uses live keys: Stripe
+is forced to Test, PayPal to Sandbox, a live looking Stripe key (`sk_live_`,
+`rk_live_`, `pk_live_`) is refused even in a test field, new live keys are not
+saved, and administrators see a notice (plus an error notice when live secrets
+are still stored in that database).
+
+A site is not production when any of these is true:
+
+1. `wp_get_environment_type()` is not `production` (set `WP_ENVIRONMENT_TYPE` in `wp-config.php` on staging).
+2. `RINGO_PRODUCTION_HOSTS` (or the `ringo_production_hosts` filter) lists hosts and this site's host (from `home_url()`) is not one of them. **Recommended on live**: it is the strictest check, because a staging copy has a different host.
+3. With no host list: the host contains `staging`, `localhost`, `.local` or `.test` (filter: `ringo_non_production_host_markers`).
+
+The `ringo_is_production_site` filter has the final say.
+
+**Before deploying this version to a live site**, check that it counts as
+production (`wp eval 'echo wp_get_environment_type();'` should print
+`production`), or payments there switch to test mode.
+
+### Least privilege for the keys
+
+**Stripe: use a restricted key** (`rk_live_...`), not the standard secret key.
+The server side of this plugin makes only these Stripe API calls:
+
+| Call | Where |
+|---|---|
+| `PaymentIntent::create` | new listing checkout (`frontend/ajax-stripe.php`), add-on orders (`includes/addon-orders.php`) |
+| `PaymentIntent::retrieve` | thank-you page check (`frontend/thank-you.php`), add-on order completion (`includes/addon-orders.php`), abandoned checkout job (`cron/abandoned.php`) |
+
+So the restricted key needs **PaymentIntents: Write** (write includes read)
+and **None** for everything else. In particular **Payouts, Balance,
+Customers, Charges, Refunds, Transfers, Payment links, Webhook endpoints and
+all Connect permissions: None.** The browser side (Stripe.js
+`confirmCardPayment`) uses the publishable key and needs nothing on the
+restricted key. Create a matching test mode restricted key and run a test
+checkout and an add-on order on staging before switching live.
+
+**PayPal:** the plugin calls `/v1/oauth2/token` and `/v2/checkout/orders`
+(create, get, capture) only. In the PayPal developer dashboard, give the app
+**Accept payments** only and turn **off Payouts**, Log in with PayPal,
+Invoicing, Subscriptions, Vault and anything else not needed. PayPal cannot
+limit a secret further, so keep it in a constant and roll it after any leak.
+
+### Other constants
 
 ```php
 define( 'RINGO_DEBUG', true );                              // mirror the plugin log to PHP error_log
 define( 'RINGO_DRAFT_FAILURE_JOSH_EMAIL', 'name@example.com' ); // extra recipient for payment failure alerts
 ```
+
+The plugin log and payment failure emails pass through
+`ringo_redact_secrets()`, which removes Stripe keys, PaymentIntent client
+secrets, Authorization header values and the exact value of every configured
+secret.
 
 **Never commit API keys, webhook secrets or tokens to this repository.**
 
@@ -174,7 +264,7 @@ All under the **Ringo Custom Checkout** menu (administrators only):
 
 | Screen | Purpose |
 |---|---|
-| Payments | Payment records and add-on orders, with delete and mark-as-paid actions |
+| Payments | Payment records and add-on orders, with delete and mark-as-paid actions (administrators only) |
 | Settings | Mode, keys, prices, descriptions, timings |
 | Add-ons | Create and edit add-ons |
 | Email Logs | Record of emails sent by the plugin |
@@ -193,9 +283,12 @@ Two dashboard widgets are added: **Paid Boats**, and **Action Required** (unpaid
 | `ringo_native_login_url` | Login page URL for logged-out visitors |
 | `ringo_draft_failure_recipients` | Recipients of payment failure alerts |
 | `ringo_log_to_error_log` | Mirror a log message to PHP `error_log` |
+| `ringo_production_hosts` | Hosts allowed to use live keys (adds to `RINGO_PRODUCTION_HOSTS`) |
+| `ringo_non_production_host_markers` | Host substrings that mean "not production" when no host list is set |
+| `ringo_is_production_site` | Final say on whether live keys may be used |
 | `ringo_allow_client_price_fallback` | Off by default for security: prices come only from the plugin settings. Return true to accept a browser-supplied price for an unknown package (legacy sites only) |
 
-**Options:** `ringo_stripe_settings`, `ringo_checkout_addons`, `ringo_coupons`, `ringo_coupon_email_template`, `ringo_email_logs`.
+**Options:** `ringo_stripe_settings` (not autoloaded), `ringo_checkout_addons`, `ringo_coupons`, `ringo_coupon_email_template`, `ringo_email_logs`.
 
 **Boat meta** is prefixed `_ringo_` (for example `_ringo_checkout_status`, `_ringo_amount`, `_ringo_coupon_code`, `_ringo_draft_failure_history`). The native form also keeps the existing seller and boat meta names, and writes both `motor_hours` and `engine_hours` for compatibility.
 
@@ -216,7 +309,9 @@ The plugin checks this repository for new versions using [Plugin Update Checker]
 ```
 ringo-stripe-paypal-checkout.php   plugin header, constants, loader, activation
 unpaid-boats-cron.php              unpaid-boat reminder job
-includes/                          settings, helpers, Stripe, PayPal, add-ons, payment logic, updater
+includes/                          settings, secrets (keys, staging guard, redaction), helpers, Stripe, PayPal, add-ons, payment logic, updater
+examples/                          ringo-payment-keys.example.php (template, never the real keys)
+tests/                             secrets-harness.php (standalone, no WordPress needed)
 frontend/                          native forms, AJAX endpoints, thank-you page, assets
 admin/                             menu, settings, payments, add-ons, logs, coupons, widget
 emails/                            customer, admin, abandoned and failure email templates
@@ -227,6 +322,19 @@ vendor/                            Stripe SDK and Plugin Update Checker (bundled
 ## Changelog
 
 Versions follow the `Version:` line in the plugin header. Each version from 9.4.0 is a tag in this repository.
+
+### Unreleased: payment key hardening (branch `security/payment-key-hardening`)
+
+Not released and no version bump yet: the version is set when this is merged.
+
+- Keys from constants first (`RINGO_STRIPE_LIVE_SECRET` and friends), a constant always wins over the database. `RINGO_STRIPE_SECRET_KEY` still works.
+- The settings page never prints a secret: password fields, empty value, "Saved, ends in ••••1234", "Set in wp-config (locked)"; empty keeps the saved key, a Clear box removes it.
+- Staging safety: off production, Stripe is forced to Test and PayPal to Sandbox, live keys are refused and not saved, and admins see a notice. `RINGO_PRODUCTION_HOSTS` allowlist and filters.
+- Secrets are redacted from the plugin log and from payment failure emails.
+- `ringo_stripe_settings` is no longer autoloaded.
+- Deleting a payment row now needs `manage_options` (was `delete_posts`); the admin bypass also checks `manage_options`.
+- README: restricted Stripe key permissions and PayPal app features the plugin needs.
+- `tests/secrets-harness.php`: standalone checks for all of the above.
 
 ### 9.7.4 (2026-11-11)
 

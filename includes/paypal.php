@@ -20,21 +20,21 @@ if ( ! defined( 'ABSPATH' ) ) {
  * }
  */
 function ringo_get_paypal_active_credentials() {
-	$s = ringo_get_settings();
-
-	if ( $s['paypal_mode'] === 'live' ) {
+	// Constant first, then the saved setting. Off production this is always
+	// sandbox and live credentials are never returned (includes/secrets.php).
+	if ( 'live' === ringo_get_effective_paypal_mode() ) {
 		return [
 			'mode'      => 'live',
-			'client_id' => trim( (string) ( $s['paypal_live_client_id'] ?? '' ) ),
-			'secret'    => trim( (string) ( $s['paypal_live_secret'] ?? '' ) ),
+			'client_id' => ringo_get_usable_credential( 'paypal_live_client_id' ),
+			'secret'    => ringo_get_usable_credential( 'paypal_live_secret' ),
 			'api_base'  => 'https://api-m.paypal.com',
 		];
 	}
 
 	return [
 		'mode'      => 'sandbox',
-		'client_id' => trim( (string) ( $s['paypal_sandbox_client_id'] ?? '' ) ),
-		'secret'    => trim( (string) ( $s['paypal_sandbox_secret'] ?? '' ) ),
+		'client_id' => ringo_get_usable_credential( 'paypal_sandbox_client_id' ),
+		'secret'    => ringo_get_usable_credential( 'paypal_sandbox_secret' ),
 		'api_base'  => 'https://api-m.sandbox.paypal.com',
 	];
 }

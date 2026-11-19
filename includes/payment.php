@@ -309,7 +309,7 @@ add_action( 'wp_ajax_ringo_admin_bypass', 'ringo_ajax_admin_bypass' );
 
 function ringo_ajax_admin_bypass() {
 	// Only administrators may use this endpoint.
-	if ( ! current_user_can( 'administrator' ) ) {
+	if ( ! current_user_can( 'administrator' ) || ! current_user_can( 'manage_options' ) ) {
 		wp_send_json_error( 'Unauthorized' );
 	}
 

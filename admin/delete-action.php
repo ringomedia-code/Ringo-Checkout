@@ -21,7 +21,9 @@ function ringo_handle_delete_payment_row() {
 	if ( ! is_admin() ) {
 		return;
 	}
-	if ( ! current_user_can( 'delete_posts' ) ) {
+	// Same capability as the Payments page that links here (was delete_posts,
+	// which editors and authors also have).
+	if ( ! current_user_can( 'manage_options' ) ) {
 		return;
 	}
 

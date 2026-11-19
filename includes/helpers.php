@@ -30,6 +30,11 @@ if ( ! function_exists( 'ringo_log' ) ) {
 	 * @param string     $type    'boat' (default) or 'email'.
 	 */
 	function ringo_log( $message, $data = null, $type = 'boat' ) {
+		// Never let a key, client secret or auth header reach a log (includes/secrets.php).
+		if ( function_exists( 'ringo_redact_secrets' ) ) {
+			$message = ringo_redact_secrets( (string) $message );
+			$data    = ringo_redact_secrets( $data );
+		}
 		$line = '🧾 [Ringo Pay] ' . $message;
 		if ( null !== $data ) {
 			$line .= ' | ' . ( is_array( $data ) || is_object( $data )

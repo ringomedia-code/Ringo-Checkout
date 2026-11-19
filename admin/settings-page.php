@@ -134,41 +134,74 @@ function ringo_field_mode() {
 	<?php
 }
 
-function ringo_field_test_key() {
-	$s = ringo_get_settings();
-	printf(
-		'<input type="text" autocomplete="new-password" name="ringo_stripe_settings[stripe_test_secret]" value="%s" class="regular-text" />',
-		esc_attr( $s['stripe_test_secret'] )
-	);
-	echo '<p class="description">Starts with <code>sk_test_</code></p>';
+/**
+ * Render one credential input.
+ *
+ * Secrets are NEVER printed: the input is type="password" with an empty value,
+ * and only "Saved, ends in ••••1234" is shown. Leaving it empty on save keeps
+ * the stored value; the "Clear" box blanks it. A field set by a constant is
+ * shown locked. See includes/secrets.php.
+ *
+ * @param string $field Settings field.
+ * @param string $hint  Help text (HTML allowed: code tags only).
+ */
+function ringo_render_credential_field( $field, $hint = '' ) {
+	$name      = 'ringo_stripe_settings[' . $field . ']';
+	$is_secret = in_array( $field, ringo_secret_fields(), true );
+	$const     = ringo_credential_constant_in_use( $field );
+	$cred      = ringo_get_credential( $field );
+	$notes     = [];
+
+	if ( $is_secret ) {
+		if ( $const ) {
+			printf(
+				'<input type="password" name="%s" value="" class="regular-text" disabled="disabled" placeholder="Set in wp-config (locked)" />',
+				esc_attr( $name )
+			);
+			$notes[] = 'Set in wp-config (locked): <code>' . esc_html( $const ) . '</code>, ends in ' . esc_html( ringo_mask_secret( $cred['value'] ) ) . '.';
+		} else {
+			printf(
+				'<input type="password" autocomplete="new-password" name="%s" value="" class="regular-text" placeholder="%s" />',
+				esc_attr( $name ),
+				esc_attr( '' !== $cred['value'] ? 'Leave empty to keep the saved key' : '' )
+			);
+			if ( '' !== $cred['value'] ) {
+				$notes[] = 'Saved, ends in ' . esc_html( ringo_mask_secret( $cred['value'] ) ) . '.';
+				$notes[] = sprintf(
+					'<label><input type="checkbox" name="ringo_stripe_settings[clear][%s]" value="1" /> Clear this saved key</label>',
+					esc_attr( $field )
+				);
+			} else {
+				$notes[] = 'Not set.';
+			}
+		}
+	} else {
+		// Client IDs and publishable keys are public by design.
+		printf(
+			'<input type="text" name="%s" value="%s" class="regular-text"%s />',
+			esc_attr( $name ),
+			esc_attr( $cred['value'] ),
+			$const ? ' disabled="disabled"' : ''
+		);
+		if ( $const ) {
+			$notes[] = 'Set in wp-config (locked): <code>' . esc_html( $const ) . '</code>.';
+		}
+	}
+
+	if ( in_array( $field, ringo_live_credential_fields(), true ) && ! ringo_is_production_site() ) {
+		$notes[] = '<strong>Ignored on this site</strong> (not production).';
+	}
+	if ( $hint ) {
+		$notes[] = wp_kses( $hint, [ 'code' => [] ] );
+	}
+
+	echo '<p class="description">' . implode( ' ', $notes ) . '</p>'; // phpcs:ignore WordPress.Security.EscapeOutput -- parts escaped above.
 }
 
-function ringo_field_live_key() {
-	$s = ringo_get_settings();
-	printf(
-		'<input type="text" autocomplete="new-password" name="ringo_stripe_settings[stripe_live_secret]" value="%s" class="regular-text" />',
-		esc_attr( $s['stripe_live_secret'] )
-	);
-	echo '<p class="description">Starts with <code>sk_live_</code></p>';
-}
-
-function ringo_field_test_pub() {
-	$s = ringo_get_settings();
-	printf(
-		'<input type="text" name="ringo_stripe_settings[stripe_test_publishable]" value="%s" class="regular-text" />',
-		esc_attr( $s['stripe_test_publishable'] )
-	);
-	echo '<p class="description">Starts with <code>pk_test_</code></p>';
-}
-
-function ringo_field_live_pub() {
-	$s = ringo_get_settings();
-	printf(
-		'<input type="text" name="ringo_stripe_settings[stripe_live_publishable]" value="%s" class="regular-text" />',
-		esc_attr( $s['stripe_live_publishable'] )
-	);
-	echo '<p class="description">Starts with <code>pk_live_</code></p>';
-}
+function ringo_field_test_key()  { ringo_render_credential_field( 'stripe_test_secret', 'Starts with <code>sk_test_</code> or <code>rk_test_</code>.' ); }
+function ringo_field_live_key()  { ringo_render_credential_field( 'stripe_live_secret', 'Use a restricted key (<code>rk_live_</code>), see the README.' ); }
+function ringo_field_test_pub()  { ringo_render_credential_field( 'stripe_test_publishable', 'Starts with <code>pk_test_</code>' ); }
+function ringo_field_live_pub()  { ringo_render_credential_field( 'stripe_live_publishable', 'Starts with <code>pk_live_</code>' ); }
 
 function ringo_field_paypal_mode() {
 	$s = ringo_get_settings(); ?>
@@ -179,37 +212,10 @@ function ringo_field_paypal_mode() {
 	<?php
 }
 
-function ringo_field_paypal_sandbox_client() {
-	$s = ringo_get_settings();
-	printf(
-		'<input type="text" name="ringo_stripe_settings[paypal_sandbox_client_id]" value="%s" class="regular-text" />',
-		esc_attr( $s['paypal_sandbox_client_id'] )
-	);
-}
-
-function ringo_field_paypal_sandbox_secret() {
-	$s = ringo_get_settings();
-	printf(
-		'<input type="text" autocomplete="new-password" name="ringo_stripe_settings[paypal_sandbox_secret]" value="%s" class="regular-text" />',
-		esc_attr( $s['paypal_sandbox_secret'] )
-	);
-}
-
-function ringo_field_paypal_live_client() {
-	$s = ringo_get_settings();
-	printf(
-		'<input type="text" name="ringo_stripe_settings[paypal_live_client_id]" value="%s" class="regular-text" />',
-		esc_attr( $s['paypal_live_client_id'] )
-	);
-}
-
-function ringo_field_paypal_live_secret() {
-	$s = ringo_get_settings();
-	printf(
-		'<input type="text" autocomplete="new-password" name="ringo_stripe_settings[paypal_live_secret]" value="%s" class="regular-text" />',
-		esc_attr( $s['paypal_live_secret'] )
-	);
-}
+function ringo_field_paypal_sandbox_client() { ringo_render_credential_field( 'paypal_sandbox_client_id' ); }
+function ringo_field_paypal_sandbox_secret() { ringo_render_credential_field( 'paypal_sandbox_secret' ); }
+function ringo_field_paypal_live_client()    { ringo_render_credential_field( 'paypal_live_client_id' ); }
+function ringo_field_paypal_live_secret()    { ringo_render_credential_field( 'paypal_live_secret' ); }
 
 function ringo_price_input( $key ) {
 	$s   = ringo_get_settings();
@@ -270,6 +276,16 @@ function ringo_render_settings_page() {
 	?>
 	<div class="wrap">
 		<h1>Ringo Custom Checkout — Settings</h1>
+		<?php settings_errors( 'ringo_stripe_settings' ); ?>
+		<p>
+			<strong>In use now:</strong>
+			Stripe <?php echo esc_html( ucfirst( ringo_get_effective_stripe_mode() ) ); ?>,
+			PayPal <?php echo esc_html( ucfirst( ringo_get_effective_paypal_mode() ) ); ?>.
+			<?php if ( ! ringo_is_production_site() ) : ?>
+				This site is not production, so Test and Sandbox are forced.
+			<?php endif; ?>
+			Keys set as constants in wp-config always win over this page (see the plugin README).
+		</p>
 		<form method="post" action="options.php">
 			<?php
 			settings_fields( 'ringo_stripe_settings_group' );

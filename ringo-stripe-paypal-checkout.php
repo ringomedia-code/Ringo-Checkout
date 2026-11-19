@@ -29,6 +29,7 @@ require_once RINGO_CHECKOUT_DIR . 'includes/updater.php';
 require_once RINGO_CHECKOUT_DIR . 'includes/helpers.php';
 require_once RINGO_CHECKOUT_DIR . 'includes/addons.php';
 require_once RINGO_CHECKOUT_DIR . 'includes/settings.php';
+require_once RINGO_CHECKOUT_DIR . 'includes/secrets.php';
 require_once RINGO_CHECKOUT_DIR . 'includes/stripe.php';
 require_once RINGO_CHECKOUT_DIR . 'includes/paypal.php';
 require_once RINGO_CHECKOUT_DIR . 'includes/addon-orders.php';
