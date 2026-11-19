@@ -176,5 +176,10 @@ function ringo_sanitize_settings( $input ) {
 		? max( 60, (int) $input['stuck_assets_after'] )
 		: $defaults['stuck_assets_after'];
 
+	// Key and mode changes need an emailed code (includes/payment-otp.php).
+	if ( function_exists( 'ringo_otp_guard_settings' ) ) {
+		$out = ringo_otp_guard_settings( $out, $stored, is_array( $input ) ? $input : [] );
+	}
+
 	return $out;
 }

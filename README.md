@@ -92,6 +92,7 @@ constant, and **a constant always wins over the settings page**:
 | `RINGO_PAYPAL_LIVE_CLIENT_ID` / `RINGO_PAYPAL_LIVE_SECRET` | PayPal live app |
 | `RINGO_PAYPAL_SANDBOX_CLIENT_ID` / `RINGO_PAYPAL_SANDBOX_SECRET` | PayPal sandbox app |
 | `RINGO_PRODUCTION_HOSTS` | Comma list of hosts allowed to use live keys (see below) |
+| `RINGO_PAYMENT_OTP_EMAIL` | Address for change codes and change alerts (see below). **Required to change keys or modes on the settings page** |
 
 The older `RINGO_STRIPE_SECRET_KEY` and `RINGO_STRIPE_PUBLISHABLE_KEY` still
 work as before: used when no key for the active mode is set.
@@ -126,6 +127,40 @@ Secret fields are password inputs with an empty value. They show
 **Saved, ends in ••••1234** or **Not set**. Leaving a secret field empty on
 save keeps the saved key; to remove one, tick **Clear this saved key**.
 Client IDs and publishable keys are public and shown as before.
+
+### Email code for key and mode changes, and change alerts
+
+Saving the settings page with a change to **any Stripe or PayPal key or
+client ID, a cleared key, or the Stripe or PayPal mode** needs a 6 digit code
+sent by email. Prices, descriptions and timings save without a code.
+
+```php
+// wp-config.php (or the keys file above public_html). Placeholder address:
+define( 'RINGO_PAYMENT_OTP_EMAIL', 'owner@example.com' );
+```
+
+- The address is only ever read from this constant. It is not an option and
+  not on the settings page (the page shows it masked, `o•••@example.com`), so
+  someone with a stolen admin login cannot send the codes to themselves.
+- **No constant, no key changes:** without `RINGO_PAYMENT_OTP_EMAIL` the page
+  shows "Locked" and key and mode changes are refused with a notice; other
+  settings still save. There is deliberately no fallback recipient (such as the
+  site admin email, which an admin can change). Keys set as constants are not
+  affected: they are changed in the file, not on the page.
+- Flow: click **Email me a code** (or just save: a blocked save emails a code),
+  then enter the code in **Confirmation code**, re-enter the key changes and
+  save. Secrets are never kept waiting on the server between the two steps.
+- The code is valid 10 minutes, works once, only for the same user and login
+  session, and 5 wrong tries cancel it (and send an alert). Sends are limited
+  to one a minute and 5 an hour per user, 10 an hour per site. Only an HMAC of
+  the code is stored (user meta), never the code.
+- **Alert on every change:** any change to `ringo_stripe_settings` that goes
+  through WordPress (settings page, wp-cli, plugin code) emails the same
+  address: user, time (UTC), IP (`REMOTE_ADDR`), and the names of the changed
+  fields. Never values; keys at most as `set, ends in ••••1234` or `cleared`.
+  A change made straight in the database with SQL is not seen.
+- Mail goes through `wp_mail()`, so the site's SMTP plugin delivers it. Check
+  the code email arrives (SMTP log) before relying on it.
 
 ### Staging safety
 
@@ -309,7 +344,7 @@ The plugin checks this repository for new versions using [Plugin Update Checker]
 ```
 ringo-stripe-paypal-checkout.php   plugin header, constants, loader, activation
 unpaid-boats-cron.php              unpaid-boat reminder job
-includes/                          settings, secrets (keys, staging guard, redaction), helpers, Stripe, PayPal, add-ons, payment logic, updater
+includes/                          settings, secrets (keys, staging guard, redaction), payment-otp (change codes, alerts), helpers, Stripe, PayPal, add-ons, payment logic, updater
 examples/                          ringo-payment-keys.example.php (template, never the real keys)
 tests/                             secrets-harness.php (standalone, no WordPress needed)
 frontend/                          native forms, AJAX endpoints, thank-you page, assets
@@ -332,9 +367,11 @@ Not released and no version bump yet: the version is set when this is merged.
 - Staging safety: off production, Stripe is forced to Test and PayPal to Sandbox, live keys are refused and not saved, and admins see a notice. `RINGO_PRODUCTION_HOSTS` allowlist and filters.
 - Secrets are redacted from the plugin log and from payment failure emails.
 - `ringo_stripe_settings` is no longer autoloaded.
+- Email code (6 digits, 10 minutes, single use, user + session bound, 5 tries, rate limited) before any key, client ID, clear or mode change, sent to `RINGO_PAYMENT_OTP_EMAIL` only; without that constant key and mode changes are locked.
+- Alert email to the same address on every payment settings change: user, time, IP, field names (keys at most as last 4).
 - Deleting a payment row now needs `manage_options` (was `delete_posts`); the admin bypass also checks `manage_options`.
 - README: restricted Stripe key permissions and PayPal app features the plugin needs.
-- `tests/secrets-harness.php`: standalone checks for all of the above.
+- `tests/secrets-harness.php`: standalone checks for all of the above (27 scenarios).
 
 ### 9.7.4 (2026-11-11)
 

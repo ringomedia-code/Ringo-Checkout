@@ -54,6 +54,17 @@ function ringo_register_settings() {
 	add_settings_field( 'ringo_paypal_live_client',    'PayPal Live Client ID',   'ringo_field_paypal_live_client',   'ringo-stripe-checkout', 'ringo_paypal_main' );
 	add_settings_field( 'ringo_paypal_live_secret',    'PayPal Live Secret',      'ringo_field_paypal_live_secret',   'ringo-stripe-checkout', 'ringo_paypal_main' );
 
+	// Email code for key / mode changes (includes/payment-otp.php).
+	add_settings_section(
+		'ringo_otp',
+		'Confirm key and mode changes',
+		function () {
+			echo '<p>Changing any Stripe or PayPal key, clearing one, or switching Stripe or PayPal mode needs a 6 digit code sent by email. Prices, descriptions and timings save without a code.</p>';
+		},
+		'ringo-stripe-checkout'
+	);
+	add_settings_field( 'ringo_otp_code', 'Confirmation code', 'ringo_field_otp_code', 'ringo-stripe-checkout', 'ringo_otp' );
+
 	// Prices section.
 	add_settings_section(
 		'ringo_prices',
@@ -217,6 +228,24 @@ function ringo_field_paypal_sandbox_secret() { ringo_render_credential_field( 'p
 function ringo_field_paypal_live_client()    { ringo_render_credential_field( 'paypal_live_client_id' ); }
 function ringo_field_paypal_live_secret()    { ringo_render_credential_field( 'paypal_live_secret' ); }
 
+/**
+ * Confirmation code input plus "Email me a code" link. The recipient comes
+ * only from RINGO_PAYMENT_OTP_EMAIL and is shown masked.
+ */
+function ringo_field_otp_code() {
+	$to = ringo_payment_otp_email();
+	if ( '' === $to ) {
+		echo '<p><strong>Locked.</strong> Key and mode changes are disabled until <code>RINGO_PAYMENT_OTP_EMAIL</code> is defined in wp-config.php (see the plugin README).</p>';
+		return;
+	}
+	echo '<input type="text" name="ringo_stripe_settings[otp_code]" value="" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" style="width:8em" /> ';
+	printf(
+		'<a class="button" href="%s">Email me a code</a>',
+		esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=ringo_send_payment_otp' ), 'ringo_send_payment_otp' ) )
+	);
+	echo '<p class="description">Codes go to ' . esc_html( ringo_mask_email( $to ) ) . ' (set in wp-config). Valid 10 minutes, once, in this login session.</p>';
+}
+
 function ringo_price_input( $key ) {
 	$s   = ringo_get_settings();
 	$val = isset( $s['prices'][ $key ] ) ? (float) $s['prices'][ $key ] : 0.0;
@@ -276,7 +305,14 @@ function ringo_render_settings_page() {
 	?>
 	<div class="wrap">
 		<h1>Ringo Custom Checkout — Settings</h1>
-		<?php settings_errors( 'ringo_stripe_settings' ); ?>
+		<?php
+		settings_errors( 'ringo_stripe_settings' );
+		$ringo_otp_notice = get_transient( 'ringo_otp_notice_' . get_current_user_id() );
+		if ( $ringo_otp_notice ) {
+			delete_transient( 'ringo_otp_notice_' . get_current_user_id() );
+			echo '<div class="notice notice-info"><p>' . esc_html( $ringo_otp_notice ) . '</p></div>';
+		}
+		?>
 		<p>
 			<strong>In use now:</strong>
 			Stripe <?php echo esc_html( ucfirst( ringo_get_effective_stripe_mode() ) ); ?>,

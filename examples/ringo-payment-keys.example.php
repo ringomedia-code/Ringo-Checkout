@@ -19,6 +19,10 @@
 // forced to Stripe Test and PayPal Sandbox.
 define( 'RINGO_PRODUCTION_HOSTS', 'example.com,www.example.com' );
 
+// Where change codes and change alerts go. Needed to change keys or modes on
+// the settings page. Placeholder: put the real address only on the server.
+define( 'RINGO_PAYMENT_OTP_EMAIL', 'owner@example.com' );
+
 // Stripe. Live: a RESTRICTED key (rk_live_...) with only the permissions in the README.
 define( 'RINGO_STRIPE_LIVE_SECRET',      'rk_live_REPLACE_ME' );
 define( 'RINGO_STRIPE_LIVE_PUBLISHABLE', 'pk_live_REPLACE_ME' );
